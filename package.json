@@ -8,7 +8,7 @@
     "build": "rm -rf dist && ncc build src/index.ts -o dist --license licenses.txt",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "format": "prettier --write .",
-    "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.{ts,json}' '*.{js,json}'",
+    "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

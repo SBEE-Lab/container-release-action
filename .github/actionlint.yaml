@@ -1,0 +1,4 @@
+paths:
+  .github/workflows/{prepare-release,finalize-release}.yaml:
+    ignore:
+      - 'property "workflow_(repository|sha|ref)" is not defined in object type'

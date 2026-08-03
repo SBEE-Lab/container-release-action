@@ -38,16 +38,86 @@
             deadnix.enable = true;
             keep-sorted.enable = true;
             nixfmt.enable = true;
+            prettier.enable = true;
             statix.enable = true;
           };
+          settings.formatter.wrkflw = {
+            command = "${pkgs.writeShellScript "wrkflw-with-local-action" ''
+              created=
+              if [[ ! -e .container-release-action ]]; then
+                ln -s . .container-release-action
+                created=1
+              fi
+              cleanup() {
+                if [[ -n "$created" ]]; then
+                  rm -f .container-release-action
+                fi
+              }
+              trap cleanup EXIT
+              ${pkgs.wrkflw}/bin/wrkflw "$@"
+            ''}";
+            options = [ "validate" ];
+            includes = [
+              ".github/workflows/*.yaml"
+              ".github/workflows/*.yml"
+            ];
+          };
+        }
+      );
+
+      action = eachSystem (
+        { pkgs, ... }:
+        pkgs.buildNpmPackage {
+          pname = "container-release-action";
+          version = "0.0.0";
+          src = self;
+          npmDepsHash = "sha256-6aJydGmMyKs5V865AlVEkYPmBfNXY1NaLaB+h466LQI=";
+          npmBuildScript = "build";
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            npm run check
+            diff -ru ${self}/dist dist
+            runHook postCheck
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp -r action.yml dist $out/
+            runHook postInstall
+          '';
         }
       );
     in
     {
       checks = eachSystem (
-        { system, ... }:
+        { pkgs, system, ... }:
         {
+          action = action.${system};
           formatting = treefmtEval.${system}.config.build.check self;
+          workflows =
+            pkgs.runCommand "workflow-validation"
+              {
+                nativeBuildInputs = [
+                  pkgs.actionlint
+                  pkgs.wrkflw
+                ];
+              }
+              ''
+                cp -r ${self} source
+                chmod -R u+w source
+                cd source
+                ln -s . .container-release-action
+                actionlint -color -config-file .github/actionlint.yaml \
+                  .github/workflows/*.yaml \
+                  examples/buildx/*.yaml \
+                  examples/nix-docker-tools/*.yaml
+                wrkflw validate --exit-code \
+                  .github/workflows \
+                  examples/buildx \
+                  examples/nix-docker-tools
+                touch $out
+              '';
         }
       );
 
@@ -61,5 +131,11 @@
       );
 
       formatter = eachSystem ({ system, ... }: treefmtEval.${system}.config.build.wrapper);
+      packages = eachSystem (
+        { system, ... }:
+        {
+          default = action.${system};
+        }
+      );
     };
 }

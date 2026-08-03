@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
+
+      - name: Run reproducible checks
+        run: nix flake check -L
+
+  smoke-test-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Execute bundled action
+        id: action
+        uses: ./
+        with:
+          operation: validate
+          token: smoke-test-no-token
+          manifest-path: tests/fixtures/release.json
+
+      - name: Verify action outputs
+        env:
+          DIGEST: ${{ steps.action.outputs.digest }}
+          REFERENCE: ${{ steps.action.outputs.reference }}
+        run: |
+          test "$DIGEST" = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          test "$REFERENCE" = "example.test/org/image@$DIGEST"
+
+  registry-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start disposable registry
+        run: docker run --detach --publish 5000:5000 --name registry registry:3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."localhost:5000"]
+              http = true
+              insecure = true
+
+      - name: Build and push staging fixture
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: tests/fixtures/image
+          platforms: linux/amd64
+          push: true
+          tags: localhost:5000/test/image:staging
+          provenance: false
+          sbom: false
+
+      - name: Resolve staging digest and integration manifest
+        id: image
+        run: |
+          digest=$(docker buildx imagetools inspect localhost:5000/test/image:staging | awk '$1 == "Digest:" { print $2 }')
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          jq \
+            --arg digest "$digest" \
+            '.image.repository = "localhost:5000/test/image"
+             | .image.stagingReference = "localhost:5000/test/image:staging"
+             | .image.digest = $digest
+             | .image.reference = ("localhost:5000/test/image@" + $digest)' \
+            tests/fixtures/release.json > tests/fixtures/integration-release.json
+
+      - name: Promote fixture with bundled action
+        uses: ./
+        with:
+          operation: promote
+          token: integration-test-no-token
+          manifest-path: tests/fixtures/integration-release.json
+
+      - name: Verify digest and media type
+        env:
+          EXPECTED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          actual=$(docker buildx imagetools inspect localhost:5000/test/image:v1.2.3 | awk '$1 == "Digest:" { print $2 }')
+          media_type=$(docker buildx imagetools inspect --raw localhost:5000/test/image:v1.2.3 | jq -r .mediaType)
+          test "$actual" = "$EXPECTED_DIGEST"
+          test "$media_type" = "application/vnd.oci.image.manifest.v1+json"
