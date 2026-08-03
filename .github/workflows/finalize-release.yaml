@@ -1,0 +1,113 @@
+name: Finalize container release
+
+on:
+  workflow_call:
+    inputs:
+      image-repository:
+        required: true
+        type: string
+      registry-host:
+        required: true
+        type: string
+      registry-username:
+        required: true
+        type: string
+      manifest-path:
+        required: false
+        type: string
+        default: release.json
+      environment:
+        required: false
+        type: string
+        default: release
+      release-title:
+        required: false
+        type: string
+        default: ''
+      release-notes-path:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      registry-password:
+        required: true
+    outputs:
+      release-url:
+        description: Published GitHub Release URL
+        value: ${{ jobs.finalize.outputs.release-url }}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: container-release-finalize:${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      release-url: ${{ steps.publish.outputs.release-url }}
+
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Check out release action implementation
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .container-release-action
+          persist-credentials: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Log in to container registry
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ${{ inputs.registry-host }}
+          username: ${{ inputs.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Prepare release assets directory
+        run: rm -rf -- .release-assets && mkdir -- .release-assets
+
+      - name: Verify staging image and restore signed assets
+        uses: ./.container-release-action
+        with:
+          operation: verify
+          image-repository: ${{ inputs.image-repository }}
+          builder-workflow-ref: ${{ job.workflow_ref }}
+          manifest-path: ${{ inputs.manifest-path }}
+
+      - name: Promote verified digest to final tag
+        uses: ./.container-release-action
+        with:
+          operation: promote
+          image-repository: ${{ inputs.image-repository }}
+          manifest-path: ${{ inputs.manifest-path }}
+
+      - name: Publish annotated tag and GitHub Release
+        id: publish
+        uses: ./.container-release-action
+        with:
+          operation: publish
+          token: ${{ github.token }}
+          image-repository: ${{ inputs.image-repository }}
+          manifest-path: ${{ inputs.manifest-path }}
+          release-commit: ${{ github.sha }}
+          release-title: ${{ inputs.release-title }}
+          release-notes-path: ${{ inputs.release-notes-path }}
+
+      - name: Docker logout
+        if: always()
+        run: docker logout "${{ inputs.registry-host }}" || true

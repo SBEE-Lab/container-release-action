@@ -1,0 +1,76 @@
+name: Build and prepare container release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version
+        required: true
+        type: string
+      source-revision:
+        description: Immutable source commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      staging-reference: ${{ steps.meta.outputs.staging-reference }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: registry.example.org
+          username: container-push-bot
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Resolve staging reference
+        id: meta
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "staging-reference=registry.example.org/org/example:staging-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push staging image
+        id: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.staging-reference }}
+          cache-from: type=registry,ref=registry.example.org/org/example:buildcache
+          cache-to: type=registry,ref=registry.example.org/org/example:buildcache,mode=max
+          provenance: false
+          sbom: false
+
+  prepare:
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: SBEE-Lab/container-release-action/.github/workflows/prepare-release.yaml@v1.0.0
+    with:
+      version: ${{ inputs.version }}
+      source-repository: ${{ github.repository }}
+      source-revision: ${{ inputs.source-revision }}
+      image-repository: registry.example.org/org/example
+      staging-reference: ${{ needs.build.outputs.staging-reference }}
+      image-digest: ${{ needs.build.outputs.digest }}
+      build-backend: buildx
+      build-metadata-json: '{"dockerfile":"Dockerfile"}'
+      registry-host: registry.example.org
+      registry-username: container-push-bot
+    secrets:
+      registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+      app-id: ${{ secrets.APP_ID }}
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}

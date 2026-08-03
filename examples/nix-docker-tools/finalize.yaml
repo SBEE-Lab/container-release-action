@@ -1,0 +1,20 @@
+name: Finalize Nix container release
+
+on:
+  push:
+    branches: [main]
+    paths: [release.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    uses: SBEE-Lab/container-release-action/.github/workflows/finalize-release.yaml@v1.0.0
+    with:
+      image-repository: registry.example.org/org/example
+      registry-host: registry.example.org
+      registry-username: container-push-bot
+    secrets:
+      registry-password: ${{ secrets.REGISTRY_PASSWORD }}

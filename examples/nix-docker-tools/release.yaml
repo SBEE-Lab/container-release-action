@@ -1,0 +1,86 @@
+name: Build and prepare Nix container release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      staging-reference: ${{ steps.meta.outputs.staging-reference }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: cachix/install-nix-action@v31.11.0
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: registry.example.org
+          username: container-push-bot
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build and load dockerTools image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          archive=$(nix build .#container --no-link --print-out-paths)
+          docker load --input "$archive"
+          docker image inspect "example:${VERSION}"
+
+      - name: Resolve staging reference
+        id: meta
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "staging-reference=registry.example.org/org/example:staging-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Push staging image
+        env:
+          VERSION: ${{ inputs.version }}
+          STAGING: ${{ steps.meta.outputs.staging-reference }}
+        run: |
+          docker tag "example:${VERSION}" "$STAGING"
+          docker push "$STAGING"
+
+      - name: Resolve registry digest
+        id: image
+        uses: SBEE-Lab/container-release-action@v1.0.0
+        with:
+          operation: resolve
+          image-repository: registry.example.org/org/example
+          staging-reference: ${{ steps.meta.outputs.staging-reference }}
+
+  prepare:
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: SBEE-Lab/container-release-action/.github/workflows/prepare-release.yaml@v1.0.0
+    with:
+      version: ${{ inputs.version }}
+      source-repository: ${{ github.repository }}
+      source-revision: ${{ github.sha }}
+      image-repository: registry.example.org/org/example
+      staging-reference: ${{ needs.build.outputs.staging-reference }}
+      image-digest: ${{ needs.build.outputs.digest }}
+      build-backend: nix
+      build-metadata-json: '{"definition":".#container","lockFile":"flake.lock"}'
+      registry-host: registry.example.org
+      registry-username: container-push-bot
+    secrets:
+      registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+      app-id: ${{ secrets.APP_ID }}
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
