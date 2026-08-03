@@ -1,4 +1,4 @@
-import type { ReleaseManifest, ReleaseState } from '../src/manifest.js';
+import type { JsonObject, ReleaseManifest, ReleaseState } from '../src/manifest.js';
 import type { CommandResult, CommandRunner } from '../src/process.js';
 
 export const digest = `sha256:${'a'.repeat(64)}`;
@@ -77,4 +77,14 @@ export function commandResult(
 
 export function inspected(value: string): CommandResult {
   return commandResult(0, `Name: example.test/org/image:test\nDigest: ${value}\n`);
+}
+
+export function attestationEnvelope(predicate: JsonObject): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      _type: 'https://in-toto.io/Statement/v0.1',
+      predicate,
+    }),
+  ).toString('base64');
+  return JSON.stringify([{ payload }]);
 }
