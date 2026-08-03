@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Digest-preserving container release GitHub Action",
   "scripts": {
+    "build": "rm -rf dist && ncc build src/index.ts -o dist --license licenses.txt",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "format": "prettier --write .",
     "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.{ts,json}' '*.{js,json}'",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.12.0",
+    "@vercel/ncc": "0.44.1",
     "eslint": "10.8.0",
     "prettier": "3.9.6",
     "typescript": "6.0.3",

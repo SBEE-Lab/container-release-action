@@ -1,0 +1,108 @@
+name: Container Release Action
+description: Verify, sign, promote, and publish immutable container releases
+author: SBEE Lab
+
+inputs:
+  operation:
+    description: Operation to run (resolve, inspect, validate, artifacts, sign, verify, promote, prepare-pr, publish)
+    required: true
+  token:
+    description: GitHub token or GitHub App installation token
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: Release version and final image tag
+    required: false
+  source-repository:
+    description: Source repository in owner/name form
+    required: false
+  source-revision:
+    description: Immutable source revision
+    required: false
+  image-repository:
+    description: Registry image repository without a tag
+    required: false
+  staging-reference:
+    description: Unique staging image reference
+    required: false
+  image-digest:
+    description: Expected sha256 image manifest digest
+    required: false
+  platforms-json:
+    description: JSON array of target platforms
+    required: false
+    default: '["linux/amd64"]'
+  build-backend:
+    description: Build backend identifier such as buildx or nix
+    required: false
+  version-policy:
+    description: Version ordering policy (semver or none)
+    required: false
+    default: semver
+  build-metadata-json:
+    description: Backend-specific provenance metadata object
+    required: false
+    default: '{}'
+  builder-workflow-ref:
+    description: Trusted reusable workflow ref that defines the current job
+    required: false
+  builder-workflow-sha:
+    description: Commit SHA of the reusable workflow that defines the current job
+    required: false
+  manifest-path:
+    description: Release manifest path in the caller repository
+    required: false
+    default: release.json
+  assets-directory:
+    description: Directory containing release assets
+    required: false
+    default: .release-assets
+  sbom-path:
+    description: SPDX JSON SBOM path
+    required: false
+    default: .release-assets/sbom.spdx.json
+  provenance-path:
+    description: Provenance predicate path
+    required: false
+    default: .release-assets/provenance.json
+  attestation-type:
+    description: Custom provenance attestation predicate type
+    required: false
+    default: https://sjanglab.org/attestations/container-release/v1
+  base-branch:
+    description: Pull request base branch
+    required: false
+    default: main
+  release-commit:
+    description: Caller history anchor containing the verified release manifest
+    required: false
+  release-title:
+    description: Pull request and GitHub Release title
+    required: false
+  release-notes-path:
+    description: Optional Markdown release notes path
+    required: false
+
+outputs:
+  digest:
+    description: Verified image manifest digest
+  reference:
+    description: Digest-qualified image reference
+  final-reference:
+    description: Final tagged image reference
+  manifest-path:
+    description: Generated release manifest path
+  release-action:
+    description: Planned action (update or reconcile)
+  pull-request-number:
+    description: Created or updated pull request number
+  release-url:
+    description: Published GitHub Release URL
+
+runs:
+  using: node24
+  main: dist/index.js
+
+branding:
+  icon: package
+  color: blue
