@@ -50,6 +50,7 @@ Every backend must hand off the same core values:
 
 | Value                 | Requirement                                              |
 | --------------------- | -------------------------------------------------------- |
+| `release-id`          | Stable lowercase stream ID; defaults to `container`      |
 | `version`             | Final tag; `vMAJOR.MINOR.PATCH` under the default policy |
 | `source-repository`   | Source repository in `owner/name` form                   |
 | `source-revision`     | Full immutable 40-character Git commit SHA               |
@@ -60,8 +61,17 @@ Every backend must hand off the same core values:
 | `build-backend`       | Backend identifier, for example `buildx` or `nix`        |
 | `build-metadata-json` | Backend-specific provenance metadata                     |
 
-`build-metadata-json` is recorded in the signed provenance. The shared action
-does not independently prove that a declared Dockerfile path, build context,
+Each release stream stores its signed state at
+`.github/releases/<release-id>.json` by default. The path can be overridden
+with `manifest-path`, but prepare and finalize must use the same release ID and
+path. The default single-image stream keeps a conventional Git tag such as
+`v1.2.3`; custom streams use namespaced tags such as `api/v1.2.3`. Release PR
+branches are always isolated as `release/<release-id>/<version>`.
+
+`release-id` and the derived Git tag are included in both the canonical
+manifest and signed provenance. `build-metadata-json` is also recorded in the
+signed provenance. The shared action does not independently prove that a
+declared Dockerfile path, build context,
 or Nix attribute was used; the caller workflow must keep those values aligned
 with the actual build.
 
@@ -293,7 +303,7 @@ name: Finalize container release
 on:
   push:
     branches: [main]
-    paths: [release.json]
+    paths: [.github/releases/container.json]
   workflow_dispatch:
 
 permissions:
@@ -314,6 +324,45 @@ Prepare and finalize must use the same immutable action release ref. The called
 workflow checks out its bundled action implementation at the exact reusable
 workflow commit rather than executing code from the caller checkout.
 
+## Multiple independent release streams
+
+A repository that publishes independently versioned images gives each image a
+stable release ID and passes it to the prepare workflow:
+
+```yaml
+with:
+  release-id: api
+  version: v1.2.3
+  image-repository: registry.example.org/org/api
+  # The default manifest path is .github/releases/api.json.
+```
+
+Build orchestration remains caller-owned: each matrix leg must hand one staged
+digest to `prepare-release.yaml` with its release ID. The shared action does not
+aggregate matrix build outputs into an atomic bundle.
+
+This namespaces mutable GitHub state while leaving the image tag unchanged:
+
+| State          | Example                     |
+| -------------- | --------------------------- |
+| Manifest       | `.github/releases/api.json` |
+| Release branch | `release/api/v1.2.3`        |
+| Image tag      | `api:v1.2.3`                |
+| Git tag        | `api/v1.2.3`                |
+| GitHub Release | tag `api/v1.2.3`            |
+
+Each stream's caller-owned finalization workflow should watch its exact
+manifest path and pass the same release ID, manifest path, and image repository
+to `finalize-release.yaml`. Streams receive independent branch, Git tag, GitHub
+Release, environment, and concurrency state. GitHub has only one
+repository-wide "Latest" release, so namespaced stream releases are published
+with `make_latest=false`; consumers should select them by namespaced tag
+instead.
+
+This is an independent-stream model, not an atomic bundle release. Images that
+must always publish under one shared version require a different manifest that
+records all image digests and are outside this protocol.
+
 ## Required GitHub configuration
 
 Each caller repository needs:
@@ -321,6 +370,7 @@ Each caller repository needs:
 - GitHub Actions auto-merge enabled;
 - merge commits enabled;
 - appropriate required checks on `main`;
+- tag rules that protect both single-stream `v*` and namespaced `*/v*` tags;
 - a protected `release` environment that permits `main`;
 - `REGISTRY_PASSWORD`, `APP_ID`, and `APP_PRIVATE_KEY` Actions secrets;
 - access to this reusable workflow when this repository is private.
@@ -350,7 +400,7 @@ support digest-qualified OCI access and Cosign signatures and attestations.
 - Images are signed only by digest.
 - Provenance and SPDX SBOM predicates are canonicalized and attested separately.
 - Finalization restores the exact predicates from verified Cosign attestations
-  and checks their SHA256 values against `release.json`.
+  and checks their SHA256 values against the stream manifest.
 - Single-manifest promotion uses
   `docker buildx imagetools create --prefer-index=false`.
 - Existing matching releases reconcile successfully; conflicting digests fail.
@@ -358,8 +408,8 @@ support digest-qualified OCI access and Cosign signatures and attestations.
   downgrades.
 - The Fulcio identity is derived from the pinned prepare reusable workflow;
   finalize rejects any other signer.
-- Finalization binds `release.json` to the caller-configured image repository
-  and the manifest-changing commit in the triggering history.
+- Finalization binds the stream ID and manifest to the caller-configured image
+  repository and the manifest-changing commit in the triggering history.
 
 ## Action operations
 

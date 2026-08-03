@@ -7,6 +7,7 @@ import {
   assertReleaseAssetNames,
   canonicalJson,
   classifyRelease,
+  defaultReleaseId,
   releaseStateFromValue,
   sha256,
   type JsonValue,
@@ -26,12 +27,12 @@ function isStatus(error: unknown, status: number): boolean {
   );
 }
 
-function releaseBranch(version: string): string {
-  const slug = version.replaceAll('/', '-');
-  if (!/^[\w][\w.-]{0,127}$/.test(slug)) {
-    throw new Error(`version cannot form a safe release branch: ${version}`);
+function releaseBranch(releaseId: string, version: string): string {
+  const branch = `release/${releaseId}/${version}`;
+  if (branch.length > 240) {
+    throw new Error(`release ID and version form an overlong branch: ${branch}`);
   }
-  return `release/${slug}`;
+  return branch;
 }
 
 export interface PreparePullRequestRequest {
@@ -57,6 +58,7 @@ function manifestContentMatches(content: string, manifest: ReleaseManifest): boo
 
 function manifestState(manifest: ReleaseManifest): ReleaseState {
   return {
+    releaseId: manifest.release.id,
     sourceRepository: manifest.upstream.repository,
     version: manifest.upstream.tag,
     sourceRevision: manifest.upstream.commit,
@@ -113,7 +115,7 @@ export async function preparePullRequest(
 ): Promise<number | null> {
   const octokit = github.getOctokit(request.token);
   const { owner, repo } = github.context.repo;
-  const branch = releaseBranch(request.manifest.image.tag);
+  const branch = releaseBranch(request.manifest.release.id, request.manifest.image.tag);
   const content = await readFile(request.manifestPath, 'utf8');
 
   const baseRef = await octokit.rest.git.getRef({
@@ -158,7 +160,7 @@ export async function preparePullRequest(
   const commit = await octokit.rest.git.createCommit({
     owner,
     repo,
-    message: `release: track ${request.manifest.image.tag}\n\nPublish ${request.manifest.image.reference}.`,
+    message: `release: track ${request.manifest.release.id} ${request.manifest.image.tag}\n\nPublish ${request.manifest.image.reference}.`,
     tree: tree.data.sha,
     parents: [baseRef.data.object.sha],
   });
@@ -423,17 +425,18 @@ export async function publishRelease(request: PublishReleaseRequest): Promise<st
     octokit,
     owner,
     repo,
-    request.manifest.image.tag,
+    request.manifest.release.gitTag,
     releaseCommit,
   );
 
+  const namespacedRelease = request.manifest.release.id !== defaultReleaseId;
   let release;
   try {
     release = (
       await octokit.rest.repos.getReleaseByTag({
         owner,
         repo,
-        tag: request.manifest.image.tag,
+        tag: request.manifest.release.gitTag,
       })
     ).data;
     release = (
@@ -441,11 +444,12 @@ export async function publishRelease(request: PublishReleaseRequest): Promise<st
         owner,
         repo,
         release_id: release.id,
-        tag_name: request.manifest.image.tag,
+        tag_name: request.manifest.release.gitTag,
         name: request.title,
         body: request.notes,
         draft: false,
         prerelease: false,
+        ...(namespacedRelease ? { make_latest: 'false' as const } : {}),
       })
     ).data;
   } catch (error) {
@@ -456,11 +460,12 @@ export async function publishRelease(request: PublishReleaseRequest): Promise<st
       await octokit.rest.repos.createRelease({
         owner,
         repo,
-        tag_name: request.manifest.image.tag,
+        tag_name: request.manifest.release.gitTag,
         name: request.title,
         body: request.notes,
         draft: false,
         prerelease: false,
+        ...(namespacedRelease ? { make_latest: 'false' as const } : {}),
       })
     ).data;
   }

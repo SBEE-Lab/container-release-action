@@ -5,8 +5,11 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 
 import {
+  assertReleaseId,
   assertSourceRepository,
   certificateIdentityForWorkflow,
+  defaultManifestPath,
+  defaultReleaseId,
   parseJsonObject,
   parsePlatforms,
   type JsonObject,
@@ -127,6 +130,18 @@ export function repositoryPathInput(name: string): string {
   return assertRepositoryPath(
     requiredInput(name),
     name,
+    process.env.GITHUB_WORKSPACE ?? process.cwd(),
+  );
+}
+
+export function releaseIdInput(): string {
+  return assertReleaseId(input('release-id') || defaultReleaseId);
+}
+
+export function manifestPathInput(releaseId = releaseIdInput()): string {
+  return assertRepositoryPath(
+    input('manifest-path') || defaultManifestPath(releaseId),
+    'manifest-path',
     process.env.GITHUB_WORKSPACE ?? process.cwd(),
   );
 }

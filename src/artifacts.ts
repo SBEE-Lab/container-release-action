@@ -4,10 +4,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import {
   assertBuildBackend,
   assertReleaseAssetNames,
+  assertReleaseId,
   assertReleaseManifest,
   assertSourceRepository,
   assertSourceRevision,
   canonicalJson,
+  gitTagForRelease,
   isJsonObject,
   sha256,
   type JsonObject,
@@ -34,6 +36,7 @@ export interface WorkflowProvenance {
 }
 
 export interface ArtifactRequest {
+  releaseId: string;
   version: string;
   sourceRepository: string;
   sourceRevision: string;
@@ -72,6 +75,7 @@ async function canonicalizeJsonFile(path: string, name: string): Promise<string>
 export async function createArtifacts(
   request: ArtifactRequest,
 ): Promise<ReleaseManifest> {
+  const releaseId = assertReleaseId(request.releaseId);
   const version = assertTag(request.version);
   const repository = assertImageRepository(request.imageRepository);
   const digest = assertDigest(request.imageDigest);
@@ -92,6 +96,10 @@ export async function createArtifacts(
   const sbom = await canonicalizeJsonFile(request.sbomPath, 'SBOM');
   const imageReference = `${repository}@${digest}`;
   const provenance: JsonObject = {
+    release: {
+      id: releaseId,
+      gitTag: gitTagForRelease(releaseId, version),
+    },
     upstream: {
       repository: sourceRepository,
       tag: version,
@@ -124,6 +132,10 @@ export async function createArtifacts(
   await writeFile(request.provenancePath, provenanceText);
 
   const manifest: ReleaseManifest = {
+    release: {
+      id: releaseId,
+      gitTag: gitTagForRelease(releaseId, version),
+    },
     upstream: {
       repository: sourceRepository,
       tag: version,

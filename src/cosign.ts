@@ -123,6 +123,10 @@ function assertProvenanceMatchesManifest(
     throw new Error('verified provenance predicate is not an object');
   }
   const expected: JsonObject = {
+    release: {
+      id: manifest.release.id,
+      gitTag: manifest.release.gitTag,
+    },
     upstream: {
       repository: manifest.upstream.repository,
       tag: manifest.upstream.tag,
@@ -141,7 +145,7 @@ function assertProvenanceMatchesManifest(
       stagingReference: manifest.image.stagingReference,
     },
   };
-  for (const section of ['upstream', 'build', 'image']) {
+  for (const section of ['release', 'upstream', 'build', 'image']) {
     if (
       canonicalJson(provenance[section] ?? null) !==
       canonicalJson(expected[section] ?? null)

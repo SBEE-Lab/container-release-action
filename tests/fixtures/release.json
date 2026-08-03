@@ -23,6 +23,10 @@
     "stagingReference": "example.test/org/image:staging-v1.2.3-1",
     "tag": "v1.2.3"
   },
+  "release": {
+    "gitTag": "v1.2.3",
+    "id": "container"
+  },
   "supplyChain": {
     "certificateIdentity": "https://github.com/owner/repo/.github/workflows/release.yml@refs/heads/main",
     "certificateOidcIssuer": "https://token.actions.githubusercontent.com"

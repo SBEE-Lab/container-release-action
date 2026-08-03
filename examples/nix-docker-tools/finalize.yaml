@@ -3,7 +3,7 @@ name: Finalize Nix container release
 on:
   push:
     branches: [main]
-    paths: [release.json]
+    paths: [.github/releases/container.json]
   workflow_dispatch:
 
 permissions:

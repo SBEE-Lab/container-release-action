@@ -41,8 +41,12 @@ jobs:
       - name: Verify action outputs
         env:
           DIGEST: ${{ steps.action.outputs.digest }}
+          GIT_TAG: ${{ steps.action.outputs.git-tag }}
           REFERENCE: ${{ steps.action.outputs.reference }}
+          RELEASE_ID: ${{ steps.action.outputs.release-id }}
         run: |
+          test "$RELEASE_ID" = container
+          test "$GIT_TAG" = v1.2.3
           test "$DIGEST" = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           test "$REFERENCE" = "example.test/org/image@$DIGEST"
 

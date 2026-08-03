@@ -32332,7 +32332,31 @@ async function promoteImage(runner, request) {
 
 
 
+const defaultReleaseId = 'container';
 const githubActionsOidcIssuer = 'https://token.actions.githubusercontent.com';
+function assertReleaseId(value) {
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ||
+        value.includes('..') ||
+        value.endsWith('.') ||
+        value.endsWith('.lock')) {
+        throw new Error('release ID must be a lowercase safe identifier');
+    }
+    return value;
+}
+function defaultManifestPath(releaseId) {
+    return `.github/releases/${assertReleaseId(releaseId)}.json`;
+}
+function gitTagForRelease(releaseId, version) {
+    const id = assertReleaseId(releaseId);
+    const tag = assertTag(version);
+    const gitTag = id === defaultReleaseId ? tag : `${id}/${tag}`;
+    if (gitTag.includes('..') ||
+        gitTag.endsWith('.') ||
+        gitTag.split('/').some((component) => component.endsWith('.lock'))) {
+        throw new Error(`version cannot form a safe Git tag: ${version}`);
+    }
+    return gitTag;
+}
 const platformPattern = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/;
 const workflowRefPattern = /^([^/]+\/[^/]+)\/\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml@\S+$/;
 function hasControlCharacter(value) {
@@ -32483,12 +32507,14 @@ function assertReleaseManifest(value) {
     if (!isJsonObject(value)) {
         throw new Error('release manifest must be an object');
     }
+    const release = value.release;
     const upstream = value.upstream;
     const image = value.image;
     const supplyChain = value.supplyChain;
     const build = value.build;
     const artifacts = value.artifacts;
-    if (!isJsonObject(upstream) ||
+    if (!isJsonObject(release) ||
+        !isJsonObject(upstream) ||
         !isJsonObject(image) ||
         !isJsonObject(supplyChain) ||
         !isJsonObject(build) ||
@@ -32503,9 +32529,14 @@ function assertReleaseManifest(value) {
     if (!isJsonObject(metadata)) {
         throw new Error('build.metadata must be an object');
     }
+    const releaseId = assertReleaseId(requiredString(release.id, 'release.id'));
     const sourceRepository = assertSourceRepository(requiredString(upstream.repository, 'upstream.repository'));
     const sourceCommit = assertSourceRevision(requiredString(upstream.commit, 'upstream.commit'));
     const manifest = {
+        release: {
+            id: releaseId,
+            gitTag: requiredString(release.gitTag, 'release.gitTag'),
+        },
         upstream: {
             repository: sourceRepository,
             tag: assertTag(requiredString(upstream.tag, 'upstream.tag')),
@@ -32532,6 +32563,9 @@ function assertReleaseManifest(value) {
             sbom: artifact(artifacts.sbom, 'artifacts.sbom'),
         },
     };
+    if (manifest.release.gitTag !== gitTagForRelease(releaseId, tag)) {
+        throw new Error('release.gitTag does not match release.id and image.tag');
+    }
     if (manifest.image.reference !== `${repository}@${digest}`) {
         throw new Error('image.reference does not match image.repository and image.digest');
     }
@@ -32551,11 +32585,13 @@ function assertReleaseManifest(value) {
 }
 function releaseStateFromValue(value) {
     if (!isJsonObject(value) ||
+        !isJsonObject(value.release) ||
         !isJsonObject(value.upstream) ||
         !isJsonObject(value.image)) {
-        throw new Error('existing release manifest is missing upstream or image state');
+        throw new Error('existing release manifest is missing release, upstream, or image state');
     }
     return {
+        releaseId: assertReleaseId(requiredString(value.release.id, 'release.id')),
         sourceRepository: assertSourceRepository(requiredString(value.upstream.repository, 'upstream.repository')),
         version: assertTag(requiredString(value.upstream.tag, 'upstream.tag')),
         sourceRevision: assertSourceRevision(requiredString(value.upstream.commit, 'upstream.commit')),
@@ -32608,6 +32644,9 @@ function classifyRelease(current, next, policy) {
     const currentSemanticVersion = policy === 'semver' && current !== null ? semanticVersion(current.version) : null;
     if (current === null) {
         return 'update';
+    }
+    if (current.releaseId !== next.releaseId) {
+        throw new Error('release ID does not match existing release state');
     }
     if (current.sourceRepository !== next.sourceRepository) {
         throw new Error('source repository does not match existing release state');
@@ -32672,6 +32711,7 @@ async function canonicalizeJsonFile(path, name) {
     return canonical;
 }
 async function createArtifacts(request) {
+    const releaseId = assertReleaseId(request.releaseId);
     const version = assertTag(request.version);
     const repository = assertImageRepository(request.imageRepository);
     const digest = assertDigest(request.imageDigest);
@@ -32687,6 +32727,10 @@ async function createArtifacts(request) {
     const sbom = await canonicalizeJsonFile(request.sbomPath, 'SBOM');
     const imageReference = `${repository}@${digest}`;
     const provenance = {
+        release: {
+            id: releaseId,
+            gitTag: gitTagForRelease(releaseId, version),
+        },
         upstream: {
             repository: sourceRepository,
             tag: version,
@@ -32718,6 +32762,10 @@ async function createArtifacts(request) {
     await (0,promises_namespaceObject.mkdir)((0,external_node_path_namespaceObject.dirname)(request.provenancePath), { recursive: true });
     await (0,promises_namespaceObject.writeFile)(request.provenancePath, provenanceText);
     const manifest = {
+        release: {
+            id: releaseId,
+            gitTag: gitTagForRelease(releaseId, version),
+        },
         upstream: {
             repository: sourceRepository,
             tag: version,
@@ -32857,6 +32905,10 @@ function assertProvenanceMatchesManifest(provenanceText, manifest) {
         throw new Error('verified provenance predicate is not an object');
     }
     const expected = {
+        release: {
+            id: manifest.release.id,
+            gitTag: manifest.release.gitTag,
+        },
         upstream: {
             repository: manifest.upstream.repository,
             tag: manifest.upstream.tag,
@@ -32875,7 +32927,7 @@ function assertProvenanceMatchesManifest(provenanceText, manifest) {
             stagingReference: manifest.image.stagingReference,
         },
     };
-    for (const section of ['upstream', 'build', 'image']) {
+    for (const section of ['release', 'upstream', 'build', 'image']) {
         if (canonicalJson(provenance[section] ?? null) !==
             canonicalJson(expected[section] ?? null)) {
             throw new Error(`verified provenance ${section} does not match release manifest`);
@@ -37644,12 +37696,12 @@ function isStatus(error, status) {
         'status' in error &&
         error.status === status);
 }
-function releaseBranch(version) {
-    const slug = version.replaceAll('/', '-');
-    if (!/^[\w][\w.-]{0,127}$/.test(slug)) {
-        throw new Error(`version cannot form a safe release branch: ${version}`);
+function releaseBranch(releaseId, version) {
+    const branch = `release/${releaseId}/${version}`;
+    if (branch.length > 240) {
+        throw new Error(`release ID and version form an overlong branch: ${branch}`);
     }
-    return `release/${slug}`;
+    return branch;
 }
 function manifestContentMatches(content, manifest) {
     try {
@@ -37662,6 +37714,7 @@ function manifestContentMatches(content, manifest) {
 }
 function manifestState(manifest) {
     return {
+        releaseId: manifest.release.id,
         sourceRepository: manifest.upstream.repository,
         version: manifest.upstream.tag,
         sourceRevision: manifest.upstream.commit,
@@ -37700,7 +37753,7 @@ async function releaseStateAtRef(octokit, owner, repo, path, ref) {
 async function preparePullRequest(request) {
     const octokit = getOctokit(request.token);
     const { owner, repo } = github_context.repo;
-    const branch = releaseBranch(request.manifest.image.tag);
+    const branch = releaseBranch(request.manifest.release.id, request.manifest.image.tag);
     const content = await (0,promises_namespaceObject.readFile)(request.manifestPath, 'utf8');
     const baseRef = await octokit.rest.git.getRef({
         owner,
@@ -37732,7 +37785,7 @@ async function preparePullRequest(request) {
     const commit = await octokit.rest.git.createCommit({
         owner,
         repo,
-        message: `release: track ${request.manifest.image.tag}\n\nPublish ${request.manifest.image.reference}.`,
+        message: `release: track ${request.manifest.release.id} ${request.manifest.image.tag}\n\nPublish ${request.manifest.image.reference}.`,
         tree: tree.data.sha,
         parents: [baseRef.data.object.sha],
     });
@@ -37939,23 +37992,25 @@ async function publishRelease(request) {
         !manifestContentMatches(committedManifest, request.manifest)) {
         throw new Error(`${request.manifestPath} at ${releaseCommit} does not match the verified release manifest`);
     }
-    await ensureAnnotatedTag(octokit, owner, repo, request.manifest.image.tag, releaseCommit);
+    await ensureAnnotatedTag(octokit, owner, repo, request.manifest.release.gitTag, releaseCommit);
+    const namespacedRelease = request.manifest.release.id !== defaultReleaseId;
     let release;
     try {
         release = (await octokit.rest.repos.getReleaseByTag({
             owner,
             repo,
-            tag: request.manifest.image.tag,
+            tag: request.manifest.release.gitTag,
         })).data;
         release = (await octokit.rest.repos.updateRelease({
             owner,
             repo,
             release_id: release.id,
-            tag_name: request.manifest.image.tag,
+            tag_name: request.manifest.release.gitTag,
             name: request.title,
             body: request.notes,
             draft: false,
             prerelease: false,
+            ...(namespacedRelease ? { make_latest: 'false' } : {}),
         })).data;
     }
     catch (error) {
@@ -37965,11 +38020,12 @@ async function publishRelease(request) {
         release = (await octokit.rest.repos.createRelease({
             owner,
             repo,
-            tag_name: request.manifest.image.tag,
+            tag_name: request.manifest.release.gitTag,
             name: request.title,
             body: request.notes,
             draft: false,
             prerelease: false,
+            ...(namespacedRelease ? { make_latest: 'false' } : {}),
         })).data;
     }
     const assetNames = assets.map(({ name }) => name);
@@ -38098,6 +38154,12 @@ function assertRepositoryPath(value, name, workspace) {
 function repositoryPathInput(name) {
     return assertRepositoryPath(requiredInput(name), name, process.env.GITHUB_WORKSPACE ?? process.cwd());
 }
+function releaseIdInput() {
+    return assertReleaseId(input('release-id') || defaultReleaseId);
+}
+function manifestPathInput(releaseId = releaseIdInput()) {
+    return assertRepositoryPath(input('manifest-path') || defaultManifestPath(releaseId), 'manifest-path', process.env.GITHUB_WORKSPACE ?? process.cwd());
+}
 function builderWorkflowRef() {
     const workflowRef = input('builder-workflow-ref') || process.env.GITHUB_WORKFLOW_REF;
     if (!workflowRef) {
@@ -38159,13 +38221,17 @@ function assertPublishOperation(operation) {
         throw new Error(`unhandled operation: ${operation}`);
     }
 }
-function releaseTitle(version) {
-    return input('release-title') || `Container release ${version}`;
+function releaseLabel(releaseId, version) {
+    return releaseId === defaultReleaseId ? version : `${releaseId} ${version}`;
 }
-function pullRequestBody(version, sourceRepository, sourceRevision, imageReference) {
+function releaseTitle(releaseId, version) {
+    return (input('release-title') || `Container release ${releaseLabel(releaseId, version)}`);
+}
+function pullRequestBody(releaseId, version, sourceRepository, sourceRevision, imageReference) {
     return [
         '## Automated container release',
         '',
+        `- Release ID: \`${releaseId}\``,
         `- Version: \`${version}\``,
         `- Source: \`${sourceRepository}@${sourceRevision}\``,
         `- Image: \`${imageReference}\``,
@@ -38177,7 +38243,12 @@ function pullRequestBody(version, sourceRepository, sourceRevision, imageReferen
 }
 function defaultReleaseNotes(manifest) {
     return [
-        `## ${manifest.image.tag}`,
+        `## ${releaseLabel(manifest.release.id, manifest.image.tag)}`,
+        '',
+        '### Release',
+        '',
+        `- ID: \`${manifest.release.id}\``,
+        `- Git tag: \`${manifest.release.gitTag}\``,
         '',
         '### Container',
         '',
@@ -38222,6 +38293,7 @@ async function run() {
         return;
     }
     if (operation === 'artifacts') {
+        const releaseId = releaseIdInput();
         const repository = requiredInput('image-repository');
         const digest = requiredInput('image-digest');
         const version = requiredInput('version');
@@ -38229,8 +38301,9 @@ async function run() {
         const sourceRevision = requiredInput('source-revision');
         const staging = assertStagingReference(repository, requiredInput('staging-reference'));
         await verifyReference(runner, staging, digest);
-        const manifestPath = repositoryPathInput('manifest-path');
+        const manifestPath = manifestPathInput(releaseId);
         const releaseAction = classifyRelease(await readOptionalReleaseState(manifestPath), {
+            releaseId,
             sourceRepository,
             version,
             sourceRevision,
@@ -38238,6 +38311,8 @@ async function run() {
             imageDigest: digest,
         }, versionPolicyInput());
         setOutput('release-action', releaseAction);
+        setOutput('release-id', releaseId);
+        setOutput('git-tag', gitTagForRelease(releaseId, version));
         setOutput('digest', digest);
         setOutput('reference', digestReference(repository, digest));
         setOutput('manifest-path', manifestPath);
@@ -38245,6 +38320,7 @@ async function run() {
             return;
         }
         await createArtifacts({
+            releaseId,
             version,
             sourceRepository,
             sourceRevision,
@@ -38265,14 +38341,20 @@ async function run() {
         });
         return;
     }
-    const manifestPath = repositoryPathInput('manifest-path');
+    const expectedReleaseId = releaseIdInput();
+    const manifestPath = manifestPathInput(expectedReleaseId);
     const manifest = await readReleaseManifest(manifestPath);
+    if (manifest.release.id !== expectedReleaseId) {
+        throw new Error(`release ID ${manifest.release.id} does not match expected ${expectedReleaseId}`);
+    }
     const expectedRepository = input('image-repository');
     if (expectedRepository &&
         assertImageRepository(expectedRepository) !== manifest.image.repository) {
         throw new Error(`release image repository ${manifest.image.repository} does not match expected ${expectedRepository}`);
     }
     if (operation === 'validate') {
+        setOutput('release-id', manifest.release.id);
+        setOutput('git-tag', manifest.release.gitTag);
         setOutput('digest', manifest.image.digest);
         setOutput('reference', manifest.image.reference);
         setOutput('manifest-path', manifestPath);
@@ -38316,8 +38398,8 @@ async function run() {
             manifestPath,
             versionPolicy: versionPolicyInput(),
             baseBranch: requiredInput('base-branch'),
-            title: releaseTitle(manifest.image.tag),
-            body: pullRequestBody(manifest.image.tag, manifest.upstream.repository, manifest.upstream.commit, manifest.image.reference),
+            title: releaseTitle(manifest.release.id, manifest.image.tag),
+            body: pullRequestBody(manifest.release.id, manifest.image.tag, manifest.upstream.repository, manifest.upstream.commit, manifest.image.reference),
         });
         if (number !== null) {
             setOutput('pull-request-number', String(number));
@@ -38339,7 +38421,7 @@ async function run() {
         manifestPath,
         assetsDirectory: repositoryPathInput('assets-directory'),
         releaseCommit,
-        title: releaseTitle(manifest.image.tag),
+        title: releaseTitle(manifest.release.id, manifest.image.tag),
         notes,
     });
     setOutput('release-url', url);

@@ -14,11 +14,12 @@ describe('artifact generation', () => {
     const assets = join(root, '.release-assets');
     const sbom = join(assets, 'sbom.spdx.json');
     const provenance = join(assets, 'provenance.json');
-    const manifestPath = join(root, 'release.json');
+    const manifestPath = join(root, '.github/releases/api.json');
     await mkdir(assets);
     await writeFile(sbom, '{"spdxVersion":"SPDX-2.3"}\n');
 
     const generated = await createArtifacts({
+      releaseId: 'api',
       version: 'v1.2.3',
       sourceRepository: 'owner/source',
       sourceRevision,
@@ -47,6 +48,7 @@ describe('artifact generation', () => {
     });
 
     await expect(readReleaseManifest(manifestPath)).resolves.toEqual(generated);
+    expect(generated.release).toEqual({ id: 'api', gitTag: 'api/v1.2.3' });
     expect(generated.artifacts.sbom.sha256).toBe(await sha256File(sbom));
     expect(generated.artifacts.provenance.sha256).toBe(await sha256File(provenance));
   });

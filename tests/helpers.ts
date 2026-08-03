@@ -8,6 +8,10 @@ export const workflowRef = 'owner/repo/.github/workflows/release.yml@refs/heads/
 
 export function releaseManifest(): ReleaseManifest {
   return {
+    release: {
+      id: 'container',
+      gitTag: 'v1.2.3',
+    },
     upstream: {
       repository: 'owner/source',
       tag: 'v1.2.3',
@@ -43,6 +47,7 @@ export function releaseManifest(): ReleaseManifest {
 
 export function releaseState(overrides: Partial<ReleaseState> = {}): ReleaseState {
   return {
+    releaseId: 'container',
     sourceRepository: 'owner/source',
     version: 'v1.2.3',
     sourceRevision,

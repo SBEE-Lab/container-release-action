@@ -7,14 +7,15 @@ Report suspected vulnerabilities privately to the SBEE Lab repository maintainer
 ## Release invariants
 
 - Final image tags are immutable.
-- A staging reference must resolve to the digest recorded in `release.json`.
+- A staging reference must resolve to the digest recorded in its release stream manifest.
 - Signatures and attestations are created and verified against digest-qualified references.
 - Promotion must preserve the exact manifest digest.
 - Existing final tags at a different digest are rejected.
+- Release IDs and namespaced Git tags must match the canonical stream manifest and signed provenance.
 - Release assets must match the checksums committed in the release manifest.
 - GitHub App and registry credentials must be passed through the `secrets` interface.
 - The signing identity is derived from the pinned prepare reusable workflow; repository content cannot select another identity.
-- Finalization requires the manifest image repository to match the caller workflow configuration.
+- Finalization requires the release ID and manifest image repository to match the caller workflow configuration.
 - The annotated Git tag is bound to the manifest-changing commit reachable from the trigger SHA after its content is rechecked through the GitHub API.
 
 ## Version pinning

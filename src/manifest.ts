@@ -21,6 +21,7 @@ export interface ArtifactDescriptor {
 }
 
 export interface ReleaseState {
+  releaseId: string;
   sourceRepository: string;
   version: string;
   sourceRevision: string;
@@ -31,7 +32,38 @@ export interface ReleaseState {
 export type ReleaseAction = 'update' | 'reconcile';
 export type VersionPolicy = 'semver' | 'none';
 
+export const defaultReleaseId = 'container';
 export const githubActionsOidcIssuer = 'https://token.actions.githubusercontent.com';
+
+export function assertReleaseId(value: string): string {
+  if (
+    !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ||
+    value.includes('..') ||
+    value.endsWith('.') ||
+    value.endsWith('.lock')
+  ) {
+    throw new Error('release ID must be a lowercase safe identifier');
+  }
+  return value;
+}
+
+export function defaultManifestPath(releaseId: string): string {
+  return `.github/releases/${assertReleaseId(releaseId)}.json`;
+}
+
+export function gitTagForRelease(releaseId: string, version: string): string {
+  const id = assertReleaseId(releaseId);
+  const tag = assertTag(version);
+  const gitTag = id === defaultReleaseId ? tag : `${id}/${tag}`;
+  if (
+    gitTag.includes('..') ||
+    gitTag.endsWith('.') ||
+    gitTag.split('/').some((component) => component.endsWith('.lock'))
+  ) {
+    throw new Error(`version cannot form a safe Git tag: ${version}`);
+  }
+  return gitTag;
+}
 
 const platformPattern =
   /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/;
@@ -49,6 +81,10 @@ function hasControlCharacter(value: string): boolean {
 }
 
 export interface ReleaseManifest {
+  release: {
+    id: string;
+    gitTag: string;
+  };
   upstream: {
     repository: string;
     tag: string;
@@ -247,12 +283,14 @@ export function assertReleaseManifest(value: unknown): ReleaseManifest {
   if (!isJsonObject(value)) {
     throw new Error('release manifest must be an object');
   }
+  const release = value.release;
   const upstream = value.upstream;
   const image = value.image;
   const supplyChain = value.supplyChain;
   const build = value.build;
   const artifacts = value.artifacts;
   if (
+    !isJsonObject(release) ||
     !isJsonObject(upstream) ||
     !isJsonObject(image) ||
     !isJsonObject(supplyChain) ||
@@ -273,6 +311,7 @@ export function assertReleaseManifest(value: unknown): ReleaseManifest {
     throw new Error('build.metadata must be an object');
   }
 
+  const releaseId = assertReleaseId(requiredString(release.id, 'release.id'));
   const sourceRepository = assertSourceRepository(
     requiredString(upstream.repository, 'upstream.repository'),
   );
@@ -281,6 +320,10 @@ export function assertReleaseManifest(value: unknown): ReleaseManifest {
   );
 
   const manifest: ReleaseManifest = {
+    release: {
+      id: releaseId,
+      gitTag: requiredString(release.gitTag, 'release.gitTag'),
+    },
     upstream: {
       repository: sourceRepository,
       tag: assertTag(requiredString(upstream.tag, 'upstream.tag')),
@@ -319,6 +362,9 @@ export function assertReleaseManifest(value: unknown): ReleaseManifest {
     },
   };
 
+  if (manifest.release.gitTag !== gitTagForRelease(releaseId, tag)) {
+    throw new Error('release.gitTag does not match release.id and image.tag');
+  }
   if (manifest.image.reference !== `${repository}@${digest}`) {
     throw new Error('image.reference does not match image.repository and image.digest');
   }
@@ -342,12 +388,16 @@ export function assertReleaseManifest(value: unknown): ReleaseManifest {
 export function releaseStateFromValue(value: unknown): ReleaseState {
   if (
     !isJsonObject(value) ||
+    !isJsonObject(value.release) ||
     !isJsonObject(value.upstream) ||
     !isJsonObject(value.image)
   ) {
-    throw new Error('existing release manifest is missing upstream or image state');
+    throw new Error(
+      'existing release manifest is missing release, upstream, or image state',
+    );
   }
   return {
+    releaseId: assertReleaseId(requiredString(value.release.id, 'release.id')),
     sourceRepository: assertSourceRepository(
       requiredString(value.upstream.repository, 'upstream.repository'),
     ),
@@ -419,6 +469,9 @@ export function classifyRelease(
     policy === 'semver' && current !== null ? semanticVersion(current.version) : null;
   if (current === null) {
     return 'update';
+  }
+  if (current.releaseId !== next.releaseId) {
+    throw new Error('release ID does not match existing release state');
   }
   if (current.sourceRepository !== next.sourceRepository) {
     throw new Error('source repository does not match existing release state');

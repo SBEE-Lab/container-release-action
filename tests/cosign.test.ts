@@ -18,6 +18,7 @@ describe('Cosign verification', () => {
   it('restores matching attestations and rejects mismatched provenance', async () => {
     const manifest = releaseManifest();
     const provenance = {
+      release: manifest.release,
       upstream: manifest.upstream,
       builder: { workflowRef },
       build: manifest.build,

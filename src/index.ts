@@ -9,8 +9,10 @@ import {
   buildMetadataInput,
   certificateIdentityInput,
   input,
+  manifestPathInput,
   operationInput,
   platformsInput,
+  releaseIdInput,
   repositoryPathInput,
   requiredInput,
   tokenInput,
@@ -21,6 +23,8 @@ import {
 } from './inputs.js';
 import {
   classifyRelease,
+  defaultReleaseId,
+  gitTagForRelease,
   githubActionsOidcIssuer,
   readOptionalReleaseState,
   readReleaseManifest,
@@ -43,11 +47,18 @@ function assertPublishOperation(operation: Operation): void {
   }
 }
 
-function releaseTitle(version: string): string {
-  return input('release-title') || `Container release ${version}`;
+function releaseLabel(releaseId: string, version: string): string {
+  return releaseId === defaultReleaseId ? version : `${releaseId} ${version}`;
+}
+
+function releaseTitle(releaseId: string, version: string): string {
+  return (
+    input('release-title') || `Container release ${releaseLabel(releaseId, version)}`
+  );
 }
 
 function pullRequestBody(
+  releaseId: string,
   version: string,
   sourceRepository: string,
   sourceRevision: string,
@@ -56,6 +67,7 @@ function pullRequestBody(
   return [
     '## Automated container release',
     '',
+    `- Release ID: \`${releaseId}\``,
     `- Version: \`${version}\``,
     `- Source: \`${sourceRepository}@${sourceRevision}\``,
     `- Image: \`${imageReference}\``,
@@ -70,7 +82,12 @@ function defaultReleaseNotes(
   manifest: Awaited<ReturnType<typeof readReleaseManifest>>,
 ) {
   return [
-    `## ${manifest.image.tag}`,
+    `## ${releaseLabel(manifest.release.id, manifest.image.tag)}`,
+    '',
+    '### Release',
+    '',
+    `- ID: \`${manifest.release.id}\``,
+    `- Git tag: \`${manifest.release.gitTag}\``,
     '',
     '### Container',
     '',
@@ -125,6 +142,7 @@ async function run(): Promise<void> {
   }
 
   if (operation === 'artifacts') {
+    const releaseId = releaseIdInput();
     const repository = requiredInput('image-repository');
     const digest = requiredInput('image-digest');
     const version = requiredInput('version');
@@ -135,10 +153,11 @@ async function run(): Promise<void> {
       requiredInput('staging-reference'),
     );
     await verifyReference(runner, staging, digest);
-    const manifestPath = repositoryPathInput('manifest-path');
+    const manifestPath = manifestPathInput(releaseId);
     const releaseAction = classifyRelease(
       await readOptionalReleaseState(manifestPath),
       {
+        releaseId,
         sourceRepository,
         version,
         sourceRevision,
@@ -148,6 +167,8 @@ async function run(): Promise<void> {
       versionPolicyInput(),
     );
     core.setOutput('release-action', releaseAction);
+    core.setOutput('release-id', releaseId);
+    core.setOutput('git-tag', gitTagForRelease(releaseId, version));
     core.setOutput('digest', digest);
     core.setOutput('reference', digestReference(repository, digest));
     core.setOutput('manifest-path', manifestPath);
@@ -155,6 +176,7 @@ async function run(): Promise<void> {
       return;
     }
     await createArtifacts({
+      releaseId,
       version,
       sourceRepository,
       sourceRevision,
@@ -176,8 +198,14 @@ async function run(): Promise<void> {
     return;
   }
 
-  const manifestPath = repositoryPathInput('manifest-path');
+  const expectedReleaseId = releaseIdInput();
+  const manifestPath = manifestPathInput(expectedReleaseId);
   const manifest = await readReleaseManifest(manifestPath);
+  if (manifest.release.id !== expectedReleaseId) {
+    throw new Error(
+      `release ID ${manifest.release.id} does not match expected ${expectedReleaseId}`,
+    );
+  }
   const expectedRepository = input('image-repository');
   if (
     expectedRepository &&
@@ -189,6 +217,8 @@ async function run(): Promise<void> {
   }
 
   if (operation === 'validate') {
+    core.setOutput('release-id', manifest.release.id);
+    core.setOutput('git-tag', manifest.release.gitTag);
     core.setOutput('digest', manifest.image.digest);
     core.setOutput('reference', manifest.image.reference);
     core.setOutput('manifest-path', manifestPath);
@@ -244,8 +274,9 @@ async function run(): Promise<void> {
       manifestPath,
       versionPolicy: versionPolicyInput(),
       baseBranch: requiredInput('base-branch'),
-      title: releaseTitle(manifest.image.tag),
+      title: releaseTitle(manifest.release.id, manifest.image.tag),
       body: pullRequestBody(
+        manifest.release.id,
         manifest.image.tag,
         manifest.upstream.repository,
         manifest.upstream.commit,
@@ -273,7 +304,7 @@ async function run(): Promise<void> {
     manifestPath,
     assetsDirectory: repositoryPathInput('assets-directory'),
     releaseCommit,
-    title: releaseTitle(manifest.image.tag),
+    title: releaseTitle(manifest.release.id, manifest.image.tag),
     notes,
   });
   core.setOutput('release-url', url);
