@@ -1,6 +1,9 @@
 name: Auto Merge Dependency Updates
+
 on:
-  - pull_request_target
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+
 jobs:
   auto-merge-dependency-updates:
     runs-on: ubuntu-slim
@@ -8,7 +11,20 @@ jobs:
       contents: write
       pull-requests: write
     concurrency:
-      group: "auto-merge:${{ github.head_ref }}"
+      group: auto-merge:${{ github.head_ref }}
       cancel-in-progress: true
     steps:
-      - uses: Mic92/auto-merge@main
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable dependency auto-merge
+        uses: Mic92/auto-merge@main
+        with:
+          repo-token: ${{ steps.app-token.outputs.token }}
+          merge-method: merge
