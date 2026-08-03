@@ -111,10 +111,12 @@
                 actionlint -color -config-file .github/actionlint.yaml \
                   .github/workflows/*.yaml \
                   examples/buildx/*.yaml \
+                  examples/multi-image/*.yaml \
                   examples/nix-docker-tools/*.yaml
                 wrkflw validate --exit-code \
                   .github/workflows \
                   examples/buildx \
+                  examples/multi-image \
                   examples/nix-docker-tools
                 touch $out
               '';

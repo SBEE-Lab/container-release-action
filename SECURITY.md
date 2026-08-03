@@ -16,6 +16,7 @@ Report suspected vulnerabilities privately to the SBEE Lab repository maintainer
 - GitHub App and registry credentials must be passed through the `secrets` interface.
 - The signing identity is derived from the pinned prepare reusable workflow; repository content cannot select another identity.
 - Finalization requires the release ID and manifest image repository to match the caller workflow configuration.
+- Multi-image discovery accepts only manifest paths and destinations listed in the trusted release configuration.
 - The annotated Git tag is bound to the manifest-changing commit reachable from the trigger SHA after its content is rechecked through the GitHub API.
 
 ## Version pinning

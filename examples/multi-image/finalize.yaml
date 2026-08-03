@@ -1,0 +1,56 @@
+name: Finalize changed container releases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/releases/*.json
+  workflow_dispatch:
+    inputs:
+      release-id:
+        description: Trusted release stream to finalize
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.releases.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Discover trusted changed releases
+        id: releases
+        uses: SBEE-Lab/container-release-action@v1.0.0
+        with:
+          operation: discover
+          release-config-path: .github/container-releases.json
+          release-id: ${{ inputs.release-id }}
+          before-sha: ${{ github.event.before }}
+          after-sha: ${{ github.sha }}
+
+  finalize:
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    permissions:
+      contents: write
+    uses: SBEE-Lab/container-release-action/.github/workflows/finalize-release.yaml@v1.0.0
+    with:
+      release-id: ${{ matrix.release.releaseId }}
+      manifest-path: ${{ matrix.release.manifestPath }}
+      image-repository: ${{ matrix.release.imageRepository }}
+      registry-host: ${{ matrix.release.registryHost }}
+      registry-username: ${{ matrix.release.registryUsername }}
+      environment: ${{ matrix.release.environment }}
+    secrets:
+      registry-password: ${{ secrets.REGISTRY_PASSWORD }}

@@ -19,6 +19,7 @@ import {
 export type Operation =
   | 'resolve'
   | 'inspect'
+  | 'discover'
   | 'validate'
   | 'artifacts'
   | 'sign'
@@ -40,6 +41,7 @@ function hasControlCharacter(value: string): boolean {
 const operations = new Set<Operation>([
   'resolve',
   'inspect',
+  'discover',
   'validate',
   'artifacts',
   'sign',

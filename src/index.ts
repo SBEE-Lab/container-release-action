@@ -30,6 +30,7 @@ import {
   readReleaseManifest,
 } from './manifest.js';
 import { ActionsCommandRunner } from './process.js';
+import { discoverReleaseTargets, releaseMatrixJson } from './releases.js';
 import {
   assertImageRepository,
   assertStagingReference,
@@ -138,6 +139,17 @@ async function run(): Promise<void> {
     await verifyReference(runner, staging, digest);
     core.setOutput('digest', digest);
     core.setOutput('reference', digestReference(repository, digest));
+    return;
+  }
+
+  if (operation === 'discover') {
+    const targets = await discoverReleaseTargets(runner, {
+      configPath: repositoryPathInput('release-config-path'),
+      releaseId: input('release-id'),
+      beforeSha: input('before-sha'),
+      afterSha: input('after-sha'),
+    });
+    core.setOutput('matrix', releaseMatrixJson(targets));
     return;
   }
 

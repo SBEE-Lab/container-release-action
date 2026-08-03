@@ -50,6 +50,21 @@ jobs:
           test "$DIGEST" = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           test "$REFERENCE" = "example.test/org/image@$DIGEST"
 
+      - name: Discover explicit release stream
+        id: discover
+        uses: ./
+        with:
+          operation: discover
+          release-config-path: examples/multi-image/container-releases.json
+          release-id: api
+
+      - name: Verify release matrix
+        env:
+          MATRIX: ${{ steps.discover.outputs.matrix }}
+        run: |
+          test "$(jq -r 'length' <<< "$MATRIX")" = 1
+          test "$(jq -r '.[0].releaseId' <<< "$MATRIX")" = api
+
   registry-integration:
     runs-on: ubuntu-latest
     steps:

@@ -351,13 +351,39 @@ This namespaces mutable GitHub state while leaving the image tag unchanged:
 | Git tag        | `api/v1.2.3`                |
 | GitHub Release | tag `api/v1.2.3`            |
 
-Each stream's caller-owned finalization workflow should watch its exact
-manifest path and pass the same release ID, manifest path, and image repository
-to `finalize-release.yaml`. Streams receive independent branch, Git tag, GitHub
-Release, environment, and concurrency state. GitHub has only one
-repository-wide "Latest" release, so namespaced stream releases are published
-with `make_latest=false`; consumers should select them by namespaced tag
-instead.
+Finalization discovers changed manifests only through a trusted configuration,
+for example `.github/container-releases.json`:
+
+```json
+{
+  "releases": [
+    {
+      "id": "api",
+      "manifestPath": ".github/releases/api.json",
+      "imageRepository": "registry.example.org/org/api",
+      "registryHost": "registry.example.org",
+      "registryUsername": "container-push-bot",
+      "environment": "release-api"
+    }
+  ]
+}
+```
+
+A caller dispatcher watches `.github/releases/*.json`, compares the protected
+`main` push range, rejects manifests absent from this configuration, and passes
+the trusted targets to the finalize workflow as a matrix. Manual dispatch
+selects one configured `release-id`. See
+[`examples/multi-image`](examples/multi-image) for the complete dispatcher and
+configuration templates. A custom manifest location must also be added to the
+caller dispatcher's `paths` filter.
+
+The trusted configuration contains no credentials. The matrix jobs receive the
+registry password through the normal `secrets` interface. Each release stream
+gets independent branch, Git tag, GitHub Release, environment, and concurrency
+state; a failure in one matrix leg does not retarget another stream. GitHub has
+only one repository-wide "Latest" release, so namespaced stream releases are
+published with `make_latest=false`; consumers should select them by namespaced
+tag instead.
 
 This is an independent-stream model, not an atomic bundle release. Images that
 must always publish under one shared version require a different manifest that
@@ -419,6 +445,7 @@ The bundled Node 24 action is also usable directly:
 | ------------ | ---------------------------------------------------------------------- |
 | `resolve`    | Resolve the registry digest of a staging reference                     |
 | `inspect`    | Assert that a staging reference has an expected digest                 |
+| `discover`   | Build a trusted finalize matrix from changed stream manifests          |
 | `validate`   | Validate a local release manifest without mutations                    |
 | `artifacts`  | Canonicalize the SBOM and generate provenance and release metadata     |
 | `sign`       | Sign the image and attest provenance and the SPDX SBOM                 |

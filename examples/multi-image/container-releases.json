@@ -1,0 +1,20 @@
+{
+  "releases": [
+    {
+      "environment": "release-api",
+      "id": "api",
+      "imageRepository": "registry.example.org/org/api",
+      "manifestPath": ".github/releases/api.json",
+      "registryHost": "registry.example.org",
+      "registryUsername": "container-push-bot"
+    },
+    {
+      "environment": "release-worker",
+      "id": "worker",
+      "imageRepository": "registry.example.org/org/worker",
+      "manifestPath": ".github/releases/worker.json",
+      "registryHost": "registry.example.org",
+      "registryUsername": "container-push-bot"
+    }
+  ]
+}

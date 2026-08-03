@@ -4,7 +4,7 @@ author: SBEE Lab
 
 inputs:
   operation:
-    description: Operation to run (resolve, inspect, validate, artifacts, sign, verify, promote, prepare-pr, publish)
+    description: Operation to run (resolve, inspect, discover, validate, artifacts, sign, verify, promote, prepare-pr, publish)
     required: true
   token:
     description: GitHub token or GitHub App installation token
@@ -55,6 +55,16 @@ inputs:
   manifest-path:
     description: Release manifest path; defaults to .github/releases/<release-id>.json
     required: false
+  release-config-path:
+    description: Trusted multi-release configuration path
+    required: false
+    default: .github/container-releases.json
+  before-sha:
+    description: Base Git SHA for changed-manifest discovery
+    required: false
+  after-sha:
+    description: Head Git SHA for changed-manifest discovery
+    required: false
   assets-directory:
     description: Directory containing release assets
     required: false
@@ -90,6 +100,8 @@ outputs:
     description: Validated release stream identifier
   git-tag:
     description: Namespaced Git tag used for the GitHub Release
+  matrix:
+    description: Trusted changed-release matrix for finalize orchestration
   digest:
     description: Verified image manifest digest
   reference:
