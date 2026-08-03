@@ -1,0 +1,35 @@
+{
+  "artifacts": {
+    "provenance": {
+      "attestationType": "https://example.test/provenance/v1",
+      "file": "provenance.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "sbom": {
+      "attestationType": "spdxjson",
+      "file": "sbom.spdx.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "build": {
+    "backend": "buildx",
+    "metadata": {}
+  },
+  "image": {
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "platforms": ["linux/amd64"],
+    "reference": "example.test/org/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repository": "example.test/org/image",
+    "stagingReference": "example.test/org/image:staging-v1.2.3-1",
+    "tag": "v1.2.3"
+  },
+  "supplyChain": {
+    "certificateIdentity": "https://github.com/owner/repo/.github/workflows/release.yml@refs/heads/main",
+    "certificateOidcIssuer": "https://token.actions.githubusercontent.com"
+  },
+  "upstream": {
+    "commit": "dddddddddddddddddddddddddddddddddddddddd",
+    "repository": "owner/source",
+    "tag": "v1.2.3"
+  }
+}

@@ -1,10 +1,10 @@
 {
-  description = "container release action";
+  description = "Digest-preserving container release GitHub Action";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -36,6 +36,7 @@
           projectRootFile = "flake.nix";
           programs = {
             deadnix.enable = true;
+            keep-sorted.enable = true;
             nixfmt.enable = true;
             statix.enable = true;
           };
@@ -47,6 +48,15 @@
         { system, ... }:
         {
           formatting = treefmtEval.${system}.config.build.check self;
+        }
+      );
+
+      devShells = eachSystem (
+        { pkgs, ... }:
+        {
+          default = pkgs.mkShell {
+            packages = [ pkgs.nodejs_24 ];
+          };
         }
       );
 
