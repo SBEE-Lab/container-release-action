@@ -7,6 +7,10 @@ on:
         description: Release version
         required: true
         type: string
+      source-revision:
+        description: Full 40-character commit SHA to build
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +23,9 @@ jobs:
       staging-reference: ${{ steps.meta.outputs.staging-reference }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-revision }}
+          persist-credentials: false
 
       - uses: cachix/install-nix-action@v31.11.0
         with:
@@ -33,12 +40,10 @@ jobs:
       - uses: docker/setup-buildx-action@v4.2.0
 
       - name: Build and load dockerTools image
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           archive=$(nix build .#container --no-link --print-out-paths)
           docker load --input "$archive"
-          docker image inspect "example:${VERSION}"
+          docker image inspect example:build
 
       - name: Resolve staging reference
         id: meta
@@ -49,10 +54,9 @@ jobs:
 
       - name: Push staging image
         env:
-          VERSION: ${{ inputs.version }}
           STAGING: ${{ steps.meta.outputs.staging-reference }}
         run: |
-          docker tag "example:${VERSION}" "$STAGING"
+          docker tag example:build "$STAGING"
           docker push "$STAGING"
 
       - name: Resolve registry digest
@@ -72,12 +76,13 @@ jobs:
     with:
       version: ${{ inputs.version }}
       source-repository: ${{ github.repository }}
-      source-revision: ${{ github.sha }}
+      source-revision: ${{ inputs.source-revision }}
       image-repository: registry.example.org/org/example
       staging-reference: ${{ needs.build.outputs.staging-reference }}
       image-digest: ${{ needs.build.outputs.digest }}
+      platforms-json: '["linux/amd64"]'
       build-backend: nix
-      build-metadata-json: '{"definition":".#container","lockFile":"flake.lock"}'
+      build-metadata-json: '{"attribute":".#container","lockFile":"flake.lock","localImage":"example:build"}'
       registry-host: registry.example.org
       registry-username: container-push-bot
     secrets:
