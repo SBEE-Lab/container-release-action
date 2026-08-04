@@ -20,12 +20,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.image.outputs.digest }}
+      source-date-epoch: ${{ steps.source.outputs.source-date-epoch }}
       staging-reference: ${{ steps.meta.outputs.staging-reference }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source-revision }}
           persist-credentials: false
+
+      - name: Resolve reproducible source timestamp
+        id: source
+        run: echo "source-date-epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: cachix/install-nix-action@v31.11.0
         with:
@@ -77,6 +82,7 @@ jobs:
       version: ${{ inputs.version }}
       source-repository: ${{ github.repository }}
       source-revision: ${{ inputs.source-revision }}
+      source-date-epoch: ${{ needs.build.outputs.source-date-epoch }}
       image-repository: registry.example.org/org/example
       staging-reference: ${{ needs.build.outputs.staging-reference }}
       image-digest: ${{ needs.build.outputs.digest }}

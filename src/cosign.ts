@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 import { writeChecksums } from './artifacts.js';
 import {
@@ -14,34 +14,10 @@ import {
 import type { CommandRunner } from './process.js';
 import { runChecked } from './process.js';
 
-export interface SignRequest {
-  imageReference: string;
+export interface EnsureRequest {
+  manifest: ReleaseManifest;
   provenancePath: string;
   sbomPath: string;
-  provenanceAttestationType: string;
-}
-
-export async function signSupplyChain(
-  runner: CommandRunner,
-  request: SignRequest,
-): Promise<void> {
-  await runChecked(runner, 'cosign', ['sign', '--yes', request.imageReference]);
-  await runChecked(runner, 'cosign', [
-    'attest',
-    '--yes',
-    `--type=${request.provenanceAttestationType}`,
-    '--predicate',
-    request.provenancePath,
-    request.imageReference,
-  ]);
-  await runChecked(runner, 'cosign', [
-    'attest',
-    '--yes',
-    '--type=spdxjson',
-    '--predicate',
-    request.sbomPath,
-    request.imageReference,
-  ]);
 }
 
 function verificationFlags(manifest: ReleaseManifest): string[] {
@@ -55,14 +31,55 @@ interface AttestationEnvelope {
   payload?: unknown;
 }
 
-function decodePredicates(raw: string): JsonObject[] {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch (error) {
-    throw new Error('Cosign returned invalid attestation JSON', { cause: error });
+function jsonStream(raw: string): unknown[] {
+  const values: unknown[] = [];
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (start === -1) {
+      if (/\s/.test(character ?? '')) continue;
+      if (character !== '{' && character !== '[') {
+        throw new Error('Cosign returned invalid attestation JSON');
+      }
+      start = index;
+    }
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === '{' || character === '[') depth += 1;
+    else if (character === '}' || character === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          values.push(JSON.parse(raw.slice(start, index + 1)) as unknown);
+        } catch (error) {
+          throw new Error('Cosign returned invalid attestation JSON', {
+            cause: error,
+          });
+        }
+        start = -1;
+      }
+    }
   }
-  const entries = Array.isArray(value) ? value : [value];
+  if (start !== -1 || quoted || depth !== 0 || values.length === 0) {
+    throw new Error('Cosign returned invalid attestation JSON');
+  }
+  return values;
+}
+
+function decodePredicates(raw: string): JsonObject[] {
+  const entries: unknown[] = [];
+  for (const value of jsonStream(raw)) {
+    if (Array.isArray(value)) entries.push(...(value as unknown[]));
+    else entries.push(value);
+  }
   const predicates: JsonObject[] = [];
   for (const entry of entries) {
     if (!isJsonObject(entry)) {
@@ -85,19 +102,135 @@ function decodePredicates(raw: string): JsonObject[] {
   return predicates;
 }
 
-async function verifiedPredicates(
-  runner: CommandRunner,
+function attestationArguments(
   manifest: ReleaseManifest,
   attestationType: string,
-): Promise<JsonObject[]> {
-  const result = await runChecked(runner, 'cosign', [
+): string[] {
+  return [
     'verify-attestation',
     ...verificationFlags(manifest),
     `--type=${attestationType}`,
     '--output=json',
     manifest.image.reference,
-  ]);
+  ];
+}
+
+function absentEvidence(output: string): boolean {
+  return /no signatures found|no matching signatures|no matching attestations|no attestations found/i.test(
+    output,
+  );
+}
+
+async function optionalVerifiedPredicates(
+  runner: CommandRunner,
+  manifest: ReleaseManifest,
+  attestationType: string,
+): Promise<JsonObject[]> {
+  const args = attestationArguments(manifest, attestationType);
+  const result = await runner.run('cosign', args);
+  if (result.exitCode === 0) return decodePredicates(result.stdout);
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (absentEvidence(detail)) return [];
+  throw new Error(
+    `cosign ${args.join(' ')} failed with exit code ${String(result.exitCode)}${detail ? `: ${detail}` : ''}`,
+  );
+}
+
+async function verifiedPredicates(
+  runner: CommandRunner,
+  manifest: ReleaseManifest,
+  attestationType: string,
+): Promise<JsonObject[]> {
+  const result = await runChecked(
+    runner,
+    'cosign',
+    attestationArguments(manifest, attestationType),
+  );
   return decodePredicates(result.stdout);
+}
+
+async function assertPredicateFile(
+  path: string,
+  expectedHash: string,
+  name: string,
+): Promise<void> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`${name} predicate is not valid JSON: ${path}`, { cause: error });
+  }
+  if (!isJsonObject(value) || sha256(canonicalJson(value)) !== expectedHash) {
+    throw new Error(`${name} predicate does not match ${expectedHash}`);
+  }
+}
+
+function matchingPredicate(
+  predicates: readonly JsonObject[],
+  expectedHash: string,
+): string | undefined {
+  for (const predicate of predicates) {
+    const text = canonicalJson(predicate);
+    if (sha256(text) === expectedHash) return text;
+  }
+  return undefined;
+}
+
+export async function ensureSupplyChain(
+  runner: CommandRunner,
+  request: EnsureRequest,
+): Promise<void> {
+  const { manifest } = request;
+  await assertPredicateFile(
+    request.provenancePath,
+    manifest.artifacts.provenance.sha256,
+    'provenance',
+  );
+  await assertPredicateFile(request.sbomPath, manifest.artifacts.sbom.sha256, 'SBOM');
+  const verifyArgs = [
+    'verify',
+    ...verificationFlags(manifest),
+    '--output=json',
+    manifest.image.reference,
+  ];
+  const signature = await runner.run('cosign', verifyArgs);
+  if (signature.exitCode !== 0) {
+    const detail = signature.stderr.trim() || signature.stdout.trim();
+    if (!absentEvidence(detail)) {
+      throw new Error(
+        `cosign ${verifyArgs.join(' ')} failed with exit code ${String(signature.exitCode)}${detail ? `: ${detail}` : ''}`,
+      );
+    }
+    await runChecked(runner, 'cosign', ['sign', '--yes', manifest.image.reference]);
+  }
+
+  const provenanceType = manifest.artifacts.provenance.attestationType;
+  const provenance = await optionalVerifiedPredicates(runner, manifest, provenanceType);
+  if (
+    matchingPredicate(provenance, manifest.artifacts.provenance.sha256) === undefined
+  ) {
+    await runChecked(runner, 'cosign', [
+      'attest',
+      '--yes',
+      `--type=${provenanceType}`,
+      '--predicate',
+      request.provenancePath,
+      manifest.image.reference,
+    ]);
+  }
+
+  const sbomType = manifest.artifacts.sbom.attestationType;
+  const sboms = await optionalVerifiedPredicates(runner, manifest, sbomType);
+  if (matchingPredicate(sboms, manifest.artifacts.sbom.sha256) === undefined) {
+    await runChecked(runner, 'cosign', [
+      'attest',
+      '--yes',
+      `--type=${sbomType}`,
+      '--predicate',
+      request.sbomPath,
+      manifest.image.reference,
+    ]);
+  }
 }
 
 function predicateWithHash(
@@ -105,12 +238,8 @@ function predicateWithHash(
   expectedHash: string,
   name: string,
 ): string {
-  for (const predicate of predicates) {
-    const text = canonicalJson(predicate);
-    if (sha256(text) === expectedHash) {
-      return text;
-    }
-  }
+  const match = matchingPredicate(predicates, expectedHash);
+  if (match !== undefined) return match;
   throw new Error(`no verified ${name} attestation matches ${expectedHash}`);
 }
 
