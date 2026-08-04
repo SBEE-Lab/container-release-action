@@ -421,6 +421,15 @@ Registry host, repository, and username are ordinary workflow inputs. The
 registry password is the only registry credential secret. The registry must
 support digest-qualified OCI access and Cosign signatures and attestations.
 
+### Maintainer dependency updates
+
+This action repository stores `APP_ID` and `APP_PRIVATE_KEY` as Dependabot
+secrets. The vendored-dependency workflow uses that App only to update the
+Dependabot branch with the regenerated `npmDepsHash`, lockfile, and `dist/`
+output. Dependency auto-merge continues to use the repository
+`GITHUB_TOKEN`; protected-branch checks decide whether the updated PR may
+merge.
+
 ## Supply-chain behavior
 
 - Images are signed only by digest.

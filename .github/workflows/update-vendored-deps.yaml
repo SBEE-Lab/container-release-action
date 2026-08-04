@@ -1,0 +1,54 @@
+name: Update Vendored Dependencies
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-vendored-deps:${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependabot:
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create updater token
+        id: app-token
+        uses: actions/create-github-app-token@v3.0.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check out Dependabot commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
+
+      - name: Update vendored dependencies
+        run: ./scripts/update-vendored-deps.sh
+
+      - name: Commit generated changes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ -z "$(git status --short)" ]]; then
+            exit 0
+          fi
+
+          git add flake.nix package-lock.json dist/
+          git config user.name "dependabot[bot]"
+          git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
+          git commit -m "update vendored dependencies"
+          git push origin "HEAD:$HEAD_REF"
