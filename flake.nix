@@ -127,7 +127,11 @@
         { pkgs, ... }:
         {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_24 ];
+            packages = [
+              pkgs.nodejs_24
+              pkgs.prefetch-npm-deps
+              pkgs.python3
+            ];
           };
         }
       );
