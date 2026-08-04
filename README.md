@@ -3,9 +3,9 @@
 Reusable GitHub Actions for promoting a verified staging image to an immutable
 container release.
 
-> This repository is under initial development. No stable release tag exists
-> yet. Use a full commit SHA for hosted validation before publishing `v1.0.0`.
-> The examples below use `v1.0.0` as the intended stable release ref.
+> The stable action release is `v1.0.0`. Pin this immutable tag in workflow
+> references; use the full commit SHA when your organization requires
+> byte-for-byte ref pinning.
 
 ## What this action does
 
