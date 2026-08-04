@@ -195,6 +195,5 @@ export function workflowProvenance() {
     ref: github.context.ref,
     sha: github.context.sha,
     runId: String(github.context.runId),
-    runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? '1',
   };
 }

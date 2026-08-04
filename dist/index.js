@@ -32694,17 +32694,29 @@ async function readReleaseManifest(path) {
 
 
 const spdxAttestationType = 'spdxjson';
-async function canonicalizeJsonFile(path, name) {
+function sourceDate(request) {
+    if (!/^(0|[1-9][0-9]*)$/.test(request.sourceDateEpoch)) {
+        throw new Error('source-date-epoch must be a non-negative integer');
+    }
+    const epoch = Number(request.sourceDateEpoch);
+    if (!Number.isSafeInteger(epoch) || epoch > 253402300799) {
+        throw new Error('source-date-epoch is outside the supported range');
+    }
+    return new Date(epoch * 1000).toISOString().replace('.000Z', 'Z');
+}
+async function canonicalizeSbom(path, repository, digest, created) {
     let parsed;
     try {
         parsed = JSON.parse(await (0,promises_namespaceObject.readFile)(path, 'utf8'));
     }
     catch (error) {
-        throw new Error(`${name} is not valid JSON: ${path}`, { cause: error });
+        throw new Error(`SBOM is not valid JSON: ${path}`, { cause: error });
     }
-    if (!isJsonObject(parsed)) {
-        throw new Error(`${name} must contain a JSON object: ${path}`);
+    if (!isJsonObject(parsed) || !isJsonObject(parsed.creationInfo)) {
+        throw new Error(`SBOM must contain SPDX creationInfo: ${path}`);
     }
+    parsed.documentNamespace = `https://sjanglab.org/spdx/${encodeURIComponent(repository)}/${digest}`;
+    parsed.creationInfo.created = created;
     const canonical = canonicalJson(parsed);
     await (0,promises_namespaceObject.mkdir)((0,external_node_path_namespaceObject.dirname)(path), { recursive: true });
     await (0,promises_namespaceObject.writeFile)(path, canonical);
@@ -32719,12 +32731,13 @@ async function createArtifacts(request) {
     const sourceRepository = assertSourceRepository(request.sourceRepository);
     const sourceRevision = assertSourceRevision(request.sourceRevision);
     const buildBackend = assertBuildBackend(request.buildBackend);
+    const created = sourceDate(request);
     if (!request.certificateIdentity || !request.certificateOidcIssuer) {
         throw new Error('certificate identity and OIDC issuer are required');
     }
     assertReleaseAssetNames([request.manifestPath, request.sbomPath, request.provenancePath].map((path) => (0,external_node_path_namespaceObject.basename)(path)));
     await (0,promises_namespaceObject.mkdir)(request.assetsDirectory, { recursive: true });
-    const sbom = await canonicalizeJsonFile(request.sbomPath, 'SBOM');
+    const sbom = await canonicalizeSbom(request.sbomPath, repository, digest, created);
     const imageReference = `${repository}@${digest}`;
     const provenance = {
         release: {
@@ -32743,7 +32756,6 @@ async function createArtifacts(request) {
             ref: request.workflow.ref,
             sha: request.workflow.sha,
             runId: request.workflow.runId,
-            runAttempt: request.workflow.runAttempt,
         },
         build: {
             backend: buildBackend,
@@ -32824,40 +32836,69 @@ async function writeChecksums(assetsDirectory, paths) {
 
 
 
-async function signSupplyChain(runner, request) {
-    await runChecked(runner, 'cosign', ['sign', '--yes', request.imageReference]);
-    await runChecked(runner, 'cosign', [
-        'attest',
-        '--yes',
-        `--type=${request.provenanceAttestationType}`,
-        '--predicate',
-        request.provenancePath,
-        request.imageReference,
-    ]);
-    await runChecked(runner, 'cosign', [
-        'attest',
-        '--yes',
-        '--type=spdxjson',
-        '--predicate',
-        request.sbomPath,
-        request.imageReference,
-    ]);
-}
 function verificationFlags(manifest) {
     return [
         `--certificate-oidc-issuer=${manifest.supplyChain.certificateOidcIssuer}`,
         `--certificate-identity=${manifest.supplyChain.certificateIdentity}`,
     ];
 }
+function jsonStream(raw) {
+    const values = [];
+    let start = -1;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < raw.length; index += 1) {
+        const character = raw[index];
+        if (start === -1) {
+            if (/\s/.test(character ?? ''))
+                continue;
+            if (character !== '{' && character !== '[') {
+                throw new Error('Cosign returned invalid attestation JSON');
+            }
+            start = index;
+        }
+        if (quoted) {
+            if (escaped)
+                escaped = false;
+            else if (character === '\\')
+                escaped = true;
+            else if (character === '"')
+                quoted = false;
+            continue;
+        }
+        if (character === '"')
+            quoted = true;
+        else if (character === '{' || character === '[')
+            depth += 1;
+        else if (character === '}' || character === ']') {
+            depth -= 1;
+            if (depth === 0) {
+                try {
+                    values.push(JSON.parse(raw.slice(start, index + 1)));
+                }
+                catch (error) {
+                    throw new Error('Cosign returned invalid attestation JSON', {
+                        cause: error,
+                    });
+                }
+                start = -1;
+            }
+        }
+    }
+    if (start !== -1 || quoted || depth !== 0 || values.length === 0) {
+        throw new Error('Cosign returned invalid attestation JSON');
+    }
+    return values;
+}
 function decodePredicates(raw) {
-    let value;
-    try {
-        value = JSON.parse(raw);
+    const entries = [];
+    for (const value of jsonStream(raw)) {
+        if (Array.isArray(value))
+            entries.push(...value);
+        else
+            entries.push(value);
     }
-    catch (error) {
-        throw new Error('Cosign returned invalid attestation JSON', { cause: error });
-    }
-    const entries = Array.isArray(value) ? value : [value];
     const predicates = [];
     for (const entry of entries) {
         if (!isJsonObject(entry)) {
@@ -32880,23 +32921,99 @@ function decodePredicates(raw) {
     }
     return predicates;
 }
-async function verifiedPredicates(runner, manifest, attestationType) {
-    const result = await runChecked(runner, 'cosign', [
+function attestationArguments(manifest, attestationType) {
+    return [
         'verify-attestation',
         ...verificationFlags(manifest),
         `--type=${attestationType}`,
         '--output=json',
         manifest.image.reference,
-    ]);
+    ];
+}
+function absentEvidence(output) {
+    return /no signatures found|no matching signatures|no matching attestations|no attestations found/i.test(output);
+}
+async function optionalVerifiedPredicates(runner, manifest, attestationType) {
+    const args = attestationArguments(manifest, attestationType);
+    const result = await runner.run('cosign', args);
+    if (result.exitCode === 0)
+        return decodePredicates(result.stdout);
+    const detail = result.stderr.trim() || result.stdout.trim();
+    if (absentEvidence(detail))
+        return [];
+    throw new Error(`cosign ${args.join(' ')} failed with exit code ${String(result.exitCode)}${detail ? `: ${detail}` : ''}`);
+}
+async function verifiedPredicates(runner, manifest, attestationType) {
+    const result = await runChecked(runner, 'cosign', attestationArguments(manifest, attestationType));
     return decodePredicates(result.stdout);
 }
-function predicateWithHash(predicates, expectedHash, name) {
+async function assertPredicateFile(path, expectedHash, name) {
+    let value;
+    try {
+        value = JSON.parse(await (0,promises_namespaceObject.readFile)(path, 'utf8'));
+    }
+    catch (error) {
+        throw new Error(`${name} predicate is not valid JSON: ${path}`, { cause: error });
+    }
+    if (!isJsonObject(value) || sha256(canonicalJson(value)) !== expectedHash) {
+        throw new Error(`${name} predicate does not match ${expectedHash}`);
+    }
+}
+function matchingPredicate(predicates, expectedHash) {
     for (const predicate of predicates) {
         const text = canonicalJson(predicate);
-        if (sha256(text) === expectedHash) {
+        if (sha256(text) === expectedHash)
             return text;
-        }
     }
+    return undefined;
+}
+async function ensureSupplyChain(runner, request) {
+    const { manifest } = request;
+    await assertPredicateFile(request.provenancePath, manifest.artifacts.provenance.sha256, 'provenance');
+    await assertPredicateFile(request.sbomPath, manifest.artifacts.sbom.sha256, 'SBOM');
+    const verifyArgs = [
+        'verify',
+        ...verificationFlags(manifest),
+        '--output=json',
+        manifest.image.reference,
+    ];
+    const signature = await runner.run('cosign', verifyArgs);
+    if (signature.exitCode !== 0) {
+        const detail = signature.stderr.trim() || signature.stdout.trim();
+        if (!absentEvidence(detail)) {
+            throw new Error(`cosign ${verifyArgs.join(' ')} failed with exit code ${String(signature.exitCode)}${detail ? `: ${detail}` : ''}`);
+        }
+        await runChecked(runner, 'cosign', ['sign', '--yes', manifest.image.reference]);
+    }
+    const provenanceType = manifest.artifacts.provenance.attestationType;
+    const provenance = await optionalVerifiedPredicates(runner, manifest, provenanceType);
+    if (matchingPredicate(provenance, manifest.artifacts.provenance.sha256) === undefined) {
+        await runChecked(runner, 'cosign', [
+            'attest',
+            '--yes',
+            `--type=${provenanceType}`,
+            '--predicate',
+            request.provenancePath,
+            manifest.image.reference,
+        ]);
+    }
+    const sbomType = manifest.artifacts.sbom.attestationType;
+    const sboms = await optionalVerifiedPredicates(runner, manifest, sbomType);
+    if (matchingPredicate(sboms, manifest.artifacts.sbom.sha256) === undefined) {
+        await runChecked(runner, 'cosign', [
+            'attest',
+            '--yes',
+            `--type=${sbomType}`,
+            '--predicate',
+            request.sbomPath,
+            manifest.image.reference,
+        ]);
+    }
+}
+function predicateWithHash(predicates, expectedHash, name) {
+    const match = matchingPredicate(predicates, expectedHash);
+    if (match !== undefined)
+        return match;
     throw new Error(`no verified ${name} attestation matches ${expectedHash}`);
 }
 function assertProvenanceMatchesManifest(provenanceText, manifest) {
@@ -38202,7 +38319,6 @@ function workflowProvenance() {
         ref: github_context.ref,
         sha: github_context.sha,
         runId: String(github_context.runId),
-        runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? '1',
     };
 }
 
@@ -38481,6 +38597,7 @@ async function run() {
             version,
             sourceRepository,
             sourceRevision,
+            sourceDateEpoch: requiredInput('source-date-epoch'),
             imageRepository: repository,
             stagingReference: staging,
             imageDigest: digest,
@@ -38519,11 +38636,10 @@ async function run() {
     }
     if (operation === 'sign') {
         await verifyReference(runner, manifest.image.stagingReference, manifest.image.digest);
-        await signSupplyChain(runner, {
-            imageReference: manifest.image.reference,
+        await ensureSupplyChain(runner, {
+            manifest,
             provenancePath: repositoryPathInput('provenance-path'),
             sbomPath: repositoryPathInput('sbom-path'),
-            provenanceAttestationType: manifest.artifacts.provenance.attestationType,
         });
         await verifySupplyChain(runner, { manifest });
         return;

@@ -22,6 +22,9 @@ inputs:
   source-revision:
     description: Immutable source revision
     required: false
+  source-date-epoch:
+    description: SOURCE_DATE_EPOCH for deterministic release artifacts
+    required: false
   image-repository:
     description: Registry image repository without a tag
     required: false

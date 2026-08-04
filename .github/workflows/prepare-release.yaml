@@ -16,6 +16,9 @@ on:
       source-revision:
         required: true
         type: string
+      source-date-epoch:
+        required: true
+        type: string
       image-repository:
         required: true
         type: string
@@ -161,6 +164,7 @@ jobs:
           version: ${{ inputs.version }}
           source-repository: ${{ inputs.source-repository }}
           source-revision: ${{ inputs.source-revision }}
+          source-date-epoch: ${{ inputs.source-date-epoch }}
           image-repository: ${{ inputs.image-repository }}
           staging-reference: ${{ inputs.staging-reference }}
           image-digest: ${{ inputs.image-digest }}

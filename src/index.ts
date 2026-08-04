@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import * as core from '@actions/core';
 
 import { createArtifacts } from './artifacts.js';
-import { signSupplyChain, verifySupplyChain } from './cosign.js';
+import { ensureSupplyChain, verifySupplyChain } from './cosign.js';
 import { preparePullRequest, publishRelease } from './github.js';
 import {
   buildMetadataInput,
@@ -192,6 +192,7 @@ async function run(): Promise<void> {
       version,
       sourceRepository,
       sourceRevision,
+      sourceDateEpoch: requiredInput('source-date-epoch'),
       imageRepository: repository,
       stagingReference: staging,
       imageDigest: digest,
@@ -243,11 +244,10 @@ async function run(): Promise<void> {
       manifest.image.stagingReference,
       manifest.image.digest,
     );
-    await signSupplyChain(runner, {
-      imageReference: manifest.image.reference,
+    await ensureSupplyChain(runner, {
+      manifest,
       provenancePath: repositoryPathInput('provenance-path'),
       sbomPath: repositoryPathInput('sbom-path'),
-      provenanceAttestationType: manifest.artifacts.provenance.attestationType,
     });
     await verifySupplyChain(runner, { manifest });
     return;

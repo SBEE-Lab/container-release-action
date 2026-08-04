@@ -48,18 +48,19 @@ The shared workflows own:
 
 Every backend must hand off the same core values:
 
-| Value                 | Requirement                                              |
-| --------------------- | -------------------------------------------------------- |
-| `release-id`          | Stable lowercase stream ID; defaults to `container`      |
-| `version`             | Final tag; `vMAJOR.MINOR.PATCH` under the default policy |
-| `source-repository`   | Source repository in `owner/name` form                   |
-| `source-revision`     | Full immutable 40-character Git commit SHA               |
-| `image-repository`    | Registry repository without a tag                        |
-| `staging-reference`   | Unique staging tag in the same image repository          |
-| `image-digest`        | Registry-reported `sha256:...` manifest digest           |
-| `platforms-json`      | JSON array such as `["linux/amd64"]`                     |
-| `build-backend`       | Backend identifier, for example `buildx` or `nix`        |
-| `build-metadata-json` | Backend-specific provenance metadata                     |
+| Value                 | Requirement                                                 |
+| --------------------- | ----------------------------------------------------------- |
+| `release-id`          | Stable lowercase stream ID; defaults to `container`         |
+| `version`             | Final tag; `vMAJOR.MINOR.PATCH` under the default policy    |
+| `source-repository`   | Source repository in `owner/name` form                      |
+| `source-revision`     | Full immutable 40-character Git commit SHA                  |
+| `source-date-epoch`   | Commit timestamp used to make signed artifacts reproducible |
+| `image-repository`    | Registry repository without a tag                           |
+| `staging-reference`   | Unique staging tag in the same image repository             |
+| `image-digest`        | Registry-reported `sha256:...` manifest digest              |
+| `platforms-json`      | JSON array such as `["linux/amd64"]`                        |
+| `build-backend`       | Backend identifier, for example `buildx` or `nix`           |
+| `build-metadata-json` | Backend-specific provenance metadata                        |
 
 Each release stream stores its signed state at
 `.github/releases/<release-id>.json` by default. The path can be overridden
@@ -98,12 +99,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      source-date-epoch: ${{ steps.source.outputs.source-date-epoch }}
       staging-reference: ${{ steps.meta.outputs.staging-reference }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source-revision }}
           persist-credentials: false
+
+      - name: Resolve reproducible source timestamp
+        id: source
+        run: echo "source-date-epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v4.6.0
         with:
@@ -153,6 +159,7 @@ prepare:
     version: ${{ inputs.version }}
     source-repository: ${{ github.repository }}
     source-revision: ${{ inputs.source-revision }}
+    source-date-epoch: ${{ needs.build.outputs.source-date-epoch }}
     image-repository: registry.example.org/org/example
     staging-reference: ${{ needs.build.outputs.staging-reference }}
     image-digest: ${{ needs.build.outputs.digest }}
@@ -208,12 +215,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.image.outputs.digest }}
+      source-date-epoch: ${{ steps.source.outputs.source-date-epoch }}
       staging-reference: ${{ steps.meta.outputs.staging-reference }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source-revision }}
           persist-credentials: false
+
+      - name: Resolve reproducible source timestamp
+        id: source
+        run: echo "source-date-epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: cachix/install-nix-action@v31.11.0
         with:
@@ -270,6 +282,7 @@ prepare:
     version: ${{ inputs.version }}
     source-repository: ${{ github.repository }}
     source-revision: ${{ inputs.source-revision }}
+    source-date-epoch: ${{ needs.build.outputs.source-date-epoch }}
     image-repository: registry.example.org/org/example
     staging-reference: ${{ needs.build.outputs.staging-reference }}
     image-digest: ${{ needs.build.outputs.digest }}
@@ -434,6 +447,11 @@ merge.
 
 - Images are signed only by digest.
 - Provenance and SPDX SBOM predicates are canonicalized and attested separately.
+- `source-date-epoch` normalizes the SPDX creation timestamp, and the image
+  digest determines its document namespace, so retries produce identical assets.
+- Signing is convergent: matching signatures and predicates are reused, and only
+  missing evidence is appended. Verification accepts multiple Cosign results and
+  selects the predicate whose SHA256 matches the manifest.
 - Finalization restores the exact predicates from verified Cosign attestations
   and checks their SHA256 values against the stream manifest.
 - Single-manifest promotion uses
@@ -457,7 +475,7 @@ The bundled Node 24 action is also usable directly:
 | `discover`   | Build a trusted finalize matrix from changed stream manifests          |
 | `validate`   | Validate a local release manifest without mutations                    |
 | `artifacts`  | Canonicalize the SBOM and generate provenance and release metadata     |
-| `sign`       | Sign the image and attest provenance and the SPDX SBOM                 |
+| `sign`       | Ensure the digest has the exact signature, provenance, and SPDX SBOM   |
 | `verify`     | Verify the signature and restore exact signed assets from attestations |
 | `promote`    | Promote staging to the final tag without changing its manifest digest  |
 | `prepare-pr` | Create/update the release PR and enable merge-commit auto-merge        |

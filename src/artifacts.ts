@@ -32,7 +32,6 @@ export interface WorkflowProvenance {
   ref: string;
   sha: string;
   runId: string;
-  runAttempt: string;
 }
 
 export interface ArtifactRequest {
@@ -40,6 +39,7 @@ export interface ArtifactRequest {
   version: string;
   sourceRepository: string;
   sourceRevision: string;
+  sourceDateEpoch: string;
   imageRepository: string;
   stagingReference: string;
   imageDigest: string;
@@ -56,16 +56,34 @@ export interface ArtifactRequest {
   workflow: WorkflowProvenance;
 }
 
-async function canonicalizeJsonFile(path: string, name: string): Promise<string> {
+function sourceDate(request: ArtifactRequest): string {
+  if (!/^(0|[1-9][0-9]*)$/.test(request.sourceDateEpoch)) {
+    throw new Error('source-date-epoch must be a non-negative integer');
+  }
+  const epoch = Number(request.sourceDateEpoch);
+  if (!Number.isSafeInteger(epoch) || epoch > 253402300799) {
+    throw new Error('source-date-epoch is outside the supported range');
+  }
+  return new Date(epoch * 1000).toISOString().replace('.000Z', 'Z');
+}
+
+async function canonicalizeSbom(
+  path: string,
+  repository: string,
+  digest: string,
+  created: string,
+): Promise<string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path, 'utf8'));
   } catch (error) {
-    throw new Error(`${name} is not valid JSON: ${path}`, { cause: error });
+    throw new Error(`SBOM is not valid JSON: ${path}`, { cause: error });
   }
-  if (!isJsonObject(parsed)) {
-    throw new Error(`${name} must contain a JSON object: ${path}`);
+  if (!isJsonObject(parsed) || !isJsonObject(parsed.creationInfo)) {
+    throw new Error(`SBOM must contain SPDX creationInfo: ${path}`);
   }
+  parsed.documentNamespace = `https://sjanglab.org/spdx/${encodeURIComponent(repository)}/${digest}`;
+  parsed.creationInfo.created = created;
   const canonical = canonicalJson(parsed);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, canonical);
@@ -83,6 +101,7 @@ export async function createArtifacts(
   const sourceRepository = assertSourceRepository(request.sourceRepository);
   const sourceRevision = assertSourceRevision(request.sourceRevision);
   const buildBackend = assertBuildBackend(request.buildBackend);
+  const created = sourceDate(request);
   if (!request.certificateIdentity || !request.certificateOidcIssuer) {
     throw new Error('certificate identity and OIDC issuer are required');
   }
@@ -93,7 +112,7 @@ export async function createArtifacts(
     ),
   );
   await mkdir(request.assetsDirectory, { recursive: true });
-  const sbom = await canonicalizeJsonFile(request.sbomPath, 'SBOM');
+  const sbom = await canonicalizeSbom(request.sbomPath, repository, digest, created);
   const imageReference = `${repository}@${digest}`;
   const provenance: JsonObject = {
     release: {
@@ -112,7 +131,6 @@ export async function createArtifacts(
       ref: request.workflow.ref,
       sha: request.workflow.sha,
       runId: request.workflow.runId,
-      runAttempt: request.workflow.runAttempt,
     },
     build: {
       backend: buildBackend,
