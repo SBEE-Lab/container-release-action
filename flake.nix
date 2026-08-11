@@ -71,7 +71,7 @@
           pname = "container-release-action";
           version = "0.0.0";
           src = self;
-          npmDepsHash = "sha256-NW5+GUF7ryLAZuktLQRKHRYG+zhM4eLtOCTpRRriVLk=";
+          npmDepsHash = "sha256-FCSZd4X8t9VX59piKSgaTIyKs5RwxmBKC6Mxl5rD8wE=";
           npmBuildScript = "build";
           doCheck = true;
           checkPhase = ''
